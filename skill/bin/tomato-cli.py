@@ -38,8 +38,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rest_minutes": 5,
     "long_rest_minutes": 15,
     "cycles_before_long_rest": 4,
-    "notifications": True,
-    "break_suggestions": True,
 }
 
 
@@ -162,6 +160,17 @@ def cmd_start(args: argparse.Namespace) -> int:
     rest = args.rest if args.rest is not None else config.get("rest_minutes", 5)
     long_rest = config.get("long_rest_minutes", 15)
     cycles_before_long = config.get("cycles_before_long_rest", 4)
+
+    # Validate durations
+    if work <= 0:
+        print("Error: work minutes must be positive.", file=sys.stderr)
+        return 1
+    if rest <= 0:
+        print("Error: rest minutes must be positive.", file=sys.stderr)
+        return 1
+    if args.cycles is not None and args.cycles <= 0:
+        print("Error: cycles must be positive.", file=sys.stderr)
+        return 1
 
     state = load_state()
     if state is not None and state.get("active"):
@@ -620,13 +629,10 @@ def _compute_stats(entries: List[Dict[str, Any]], config: Dict[str, Any]) -> Dic
     else:
         focused_minutes = completed_cycles * work_minutes
 
-    # Breaks: rest_end means break was honored, rest_skip means skipped
+    # Breaks: rest_end means break was honored (completed naturally)
     breaks_honored = sum(1 for e in entries if e.get("event") == "rest_end")
-    breaks_skipped = sum(1 for e in entries if e.get("event") == "rest_skip")
-    total_breaks = breaks_honored + breaks_skipped
-    # If no explicit break events, assume break was offered after each cycle
-    if total_breaks == 0:
-        total_breaks = completed_cycles
+    # Total breaks offered = completed cycles (each cycle ends with a rest)
+    total_breaks = max(breaks_honored, completed_cycles)
 
     return {
         "focused_minutes": focused_minutes,
