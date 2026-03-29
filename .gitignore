@@ -1,0 +1,12 @@
+# Test artifacts
+.pytest_cache/
+coverage/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
