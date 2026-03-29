@@ -14,6 +14,10 @@ For any /tomato command, run the CLI and present its output:
 
     python3 ~/.claude/skills/tomato/bin/tomato-cli.py {command} [flags]
 
+If no subcommand is given (bare `/tomato`), run with no args to show the command menu:
+
+    python3 ~/.claude/skills/tomato/bin/tomato-cli.py
+
 ## Commands
 
 | Command | CLI call |

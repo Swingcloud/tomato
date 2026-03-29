@@ -960,8 +960,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command is None:
-        parser.print_help()
-        return 1
+        print("🍅 Tomato — AI-enforced Pomodoro for Claude Code")
+        print()
+        print("Commands:")
+        print("  /tomato start                  Start a session (25m work / 5m rest)")
+        print("  /tomato start --work 50        Custom work duration")
+        print("  /tomato start --cycles 5       Auto-stop after 5 sprints")
+        print("  /tomato stop                   End session")
+        print("  /tomato pause                  Freeze timer (lunch, meeting)")
+        print("  /tomato resume                 Pick up where you left off")
+        print("  /tomato status                 Current phase and time remaining")
+        print("  /tomato stats                  Today's focus time and streaks")
+        print("  /tomato stats --week           Weekly summary")
+        print("  /tomato stats --export csv     Export history")
+        print("  /tomato clear                  Delete all history")
+        print("  /tomato clear --before DATE    Prune old history")
+        return 0
 
     try:
         if args.command == "start":
