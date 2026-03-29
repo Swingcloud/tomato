@@ -166,7 +166,8 @@ def _completed_cycles(state: Dict[str, Any], now: Optional[int] = None) -> int:
     if phase == "rest":
         return cycle
     # Work phase: check if the timer already expired (hook hasn't transitioned yet)
-    if now is not None:
+    # But NOT if the session is paused — paused time doesn't count as work.
+    if now is not None and not state.get("paused"):
         work_min = state.get("work_minutes", 25)
         phase_started = state.get("phase_started_at", now)
         if now - phase_started >= work_min * 60:
