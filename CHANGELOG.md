@@ -2,6 +2,12 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [1.1.2] - 2026-03-29
+
+### Fixed
+- Uninstall script no longer hangs in non-interactive environments (removed `read -rp` prompt that broke when run from Claude Code or CI)
+- Uninstall now always removes `~/.tomato/` history directory
+
 ## [1.1.1] - 2026-03-29
 
 ### Fixed
