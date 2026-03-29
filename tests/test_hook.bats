@@ -5,7 +5,8 @@
 # Each test overrides HOME to a temp directory so real user state is never touched.
 # The hook reads ~/.tomato/state.json and exits 0 (allow) or 2 (block).
 
-HOOK_SCRIPT="skill/bin/tomato-hook.sh"
+REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+HOOK_SCRIPT="$REPO_ROOT/skill/bin/tomato-hook.sh"
 
 setup() {
     TEST_HOME="$(mktemp -d)"
@@ -31,6 +32,7 @@ write_state() {
         "paused": false,
         "paused_at": null,
         "elapsed_before_pause": 0,
+        "phase": "work",
         "started_at": '"$now"',
         "phase_started_at": '"$now"',
         "last_transition_at": '"$now"',
