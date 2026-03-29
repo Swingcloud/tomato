@@ -9,7 +9,7 @@ Tomato uses Claude Code's hook system to **block all tool calls** during rest pe
 ## Install
 
 ```bash
-git clone https://github.com/sam-lin/tomato.git
+git clone https://github.com/Swingcloud/tomato.git
 cd tomato
 ./install.sh
 ```
