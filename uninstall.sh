@@ -15,16 +15,16 @@ if [ ! -f "$SETTINGS_FILE" ]; then
 else
   # Try jq first, fall back to python3
   if command -v jq &>/dev/null; then
-    HOOK_COUNT=$(jq -r '
-      .hooks.PreToolUse // [] | map(select(.command == "$HOME/.claude/skills/tomato/bin/tomato-hook.sh")) | length
+    HOOK_COUNT=$(jq -r --arg cmd "$HOME/.claude/skills/tomato/bin/tomato-hook.sh" '
+      .hooks.PreToolUse // [] | map(select(.hooks[]?.command == $cmd)) | length
     ' "$SETTINGS_FILE" 2>/dev/null || echo "0")
 
     if [ "$HOOK_COUNT" = "0" ] || [ -z "$HOOK_COUNT" ]; then
       echo "  Tomato hook not found in settings. Skipping."
     else
       TEMP_FILE=$(mktemp)
-      jq '
-        .hooks.PreToolUse = [.hooks.PreToolUse[] | select(.command != "$HOME/.claude/skills/tomato/bin/tomato-hook.sh")]
+      jq --arg cmd "$HOME/.claude/skills/tomato/bin/tomato-hook.sh" '
+        .hooks.PreToolUse = [.hooks.PreToolUse[] | select((.hooks[]?.command == $cmd) | not)]
       ' "$SETTINGS_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
       echo "  Removed Tomato hook from $SETTINGS_FILE."
     fi
@@ -42,7 +42,7 @@ except (FileNotFoundError, json.JSONDecodeError):
 
 hooks = data.get('hooks', {}).get('PreToolUse', [])
 original_len = len(hooks)
-hooks = [h for h in hooks if h.get('command') != '\$HOME/.claude/skills/tomato/bin/tomato-hook.sh']
+hooks = [h for h in hooks if not any(sub.get('command') == '$HOME/.claude/skills/tomato/bin/tomato-hook.sh' for sub in h.get('hooks', []))]
 
 if len(hooks) == original_len:
     print('  Tomato hook not found in settings. Skipping.')

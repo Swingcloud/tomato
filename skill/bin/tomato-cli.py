@@ -592,7 +592,7 @@ def _entries_for_date(entries: List[Dict[str, Any]], target: datetime) -> List[D
     return [
         e
         for e in entries
-        if datetime.fromtimestamp(e.get("timestamp", 0), tz=timezone.utc).date()
+        if datetime.fromtimestamp(e.get("ts", e.get("timestamp", 0)), tz=timezone.utc).date()
         == target_date
     ]
 
@@ -641,7 +641,7 @@ def _compute_streak(all_entries: List[Dict[str, Any]]) -> int:
     for e in all_entries:
         if e.get("event") == "work_end":
             d = datetime.fromtimestamp(
-                e.get("timestamp", 0), tz=timezone.utc
+                e.get("ts", e.get("timestamp", 0)), tz=timezone.utc
             ).date()
             cycle_dates.add(d)
 
@@ -828,9 +828,10 @@ def cmd_clear(args: argparse.Namespace) -> int:
         # Delete all history
         try:
             if HISTORY_FILE.is_file():
-                events_cleared = sum(
-                    1 for line in open(HISTORY_FILE) if line.strip()
-                )
+                with open(HISTORY_FILE) as fh:
+                    events_cleared = sum(
+                        1 for line in fh if line.strip()
+                    )
                 HISTORY_FILE.unlink()
         except OSError as exc:
             print(f"Error clearing history: {exc}", file=sys.stderr)
@@ -841,7 +842,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
         events_cleared = 0
         kept: List[str] = []
         for e in entries:
-            ts = e.get("timestamp", 0)
+            ts = e.get("ts", e.get("timestamp", 0))
             entry_date = datetime.fromtimestamp(ts, tz=timezone.utc)
             if entry_date < before_date:
                 events_cleared += 1

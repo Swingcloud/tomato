@@ -125,15 +125,8 @@ format_time() {
     fi
 }
 
-PHASE="$(echo "$STATE" | jq -r '.phase')"
-PHASE_STARTED_AT="$(echo "$STATE" | jq -r '.phase_started_at')"
-WORK_MINUTES="$(echo "$STATE" | jq -r '.work_minutes')"
-REST_MINUTES="$(echo "$STATE" | jq -r '.rest_minutes')"
-LONG_REST_MINUTES="$(echo "$STATE" | jq -r '.long_rest_minutes')"
-CYCLES_BEFORE_LONG_REST="$(echo "$STATE" | jq -r '.cycles_before_long_rest')"
-CURRENT_CYCLE="$(echo "$STATE" | jq -r '.current_cycle')"
-MAX_CYCLES="$(echo "$STATE" | jq -r '.max_cycles')"
-ACTIVE_REST_MINUTES="$(echo "$STATE" | jq -r '.active_rest_minutes')"
+read -r PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES <<< \
+    "$(echo "$STATE" | jq -r '[.phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, .max_cycles, .active_rest_minutes] | @tsv')"
 
 # ---------------------------------------------------------------------------
 # Step 5: Stale detection
