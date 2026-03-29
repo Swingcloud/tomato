@@ -2,7 +2,7 @@
 
 All notable changes to Tomato will be documented in this file.
 
-## [1.0.1] - 2026-03-29
+## [1.1.1] - 2026-03-29
 
 ### Fixed
 - Cycle counting now correctly reports completed cycles when stopping mid-work (was overcounting by 1)
@@ -18,6 +18,15 @@ All notable changes to Tomato will be documented in this file.
 - Hook block messages shortened for less noise on repeated tool calls
 - Stats labels tightened: "Focus" instead of "Focused time:", "Streak" instead of "Current streak:"
 - Stats date header uses short format: "Mar 29" instead of "2026-03-29"
+
+## [1.1.0] - 2026-03-29
+
+### Added
+- Session-aware grace period for long-running tasks: when rest time starts, the session that was mid-task gets time to finish. Other sessions are blocked immediately. Grace expires after inactivity or a hard cap, whichever comes first.
+- Configurable grace period: `grace_max_sec` (default 300s/5min) and `grace_timeout_sec` (default 10s) can be set in `~/.tomato/config.json`. Lower `grace_max_sec` for stricter enforcement.
+
+### Changed
+- Extracted `GRACE_CLEAR` constant to reduce repeated jq patterns in hook
 
 ## [1.0.0] - 2026-03-29
 

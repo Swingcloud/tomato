@@ -38,6 +38,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rest_minutes": 5,
     "long_rest_minutes": 15,
     "cycles_before_long_rest": 4,
+    "grace_timeout_sec": 10,
+    "grace_max_sec": 300,
 }
 
 
@@ -321,6 +323,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         "current_cycle": 1,
         "max_cycles": args.cycles,
         "active_rest_minutes": None,
+        "grace_timeout_sec": config.get("grace_timeout_sec", 10),
+        "grace_max_sec": config.get("grace_max_sec", 300),
     }
     save_state(new_state)
 

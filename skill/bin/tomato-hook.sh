@@ -18,6 +18,9 @@ ERROR_LOG="$TOMATO_DIR/error.log"
 HISTORY_FILE="$TOMATO_DIR/history.jsonl"
 ACTIVE_DIRS="$TOMATO_DIR/active_dirs.txt"
 LOCK_DIR="$TOMATO_DIR/state.lock"
+GRACE_TIMEOUT_SEC_DEFAULT=10   # default gap between tool calls before grace expires
+GRACE_MAX_SEC_DEFAULT=300      # default hard cap on total grace duration (5 min)
+GRACE_CLEAR='.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null'
 
 log_error() {
     mkdir -p "$TOMATO_DIR"
@@ -37,11 +40,13 @@ fi
 # even during rest/pause — otherwise the user can't stop/resume.
 
 HOOK_INPUT="$(cat 2>/dev/null)" || HOOK_INPUT=""
+SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
     TOOL_CMD="$(echo "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     if echo "$TOOL_CMD" | grep -qE '(^|/)python3? .+tomato-cli\.py( |$)' 2>/dev/null; then
         exit 0
     fi
+    SESSION_ID="$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -49,7 +54,7 @@ fi
 # ---------------------------------------------------------------------------
 
 # Single jq call to extract all fields (saves ~15-30ms vs multiple spawns)
-ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, (.max_cycles // "null"), (.active_rest_minutes // "null")] | @tsv' "$STATE_FILE" 2>/dev/null)" || {
+ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, (.max_cycles // "null"), (.active_rest_minutes // "null"), (.grace_session_id // "null"), (.grace_last_call_at // "null"), (.grace_started_at // "null"), (.grace_timeout_sec // "null"), (.grace_max_sec // "null")] | @tsv' "$STATE_FILE" 2>/dev/null)" || {
     log_error "WARN: failed to parse state.json, allowing tool call"
     exit 0
 }
@@ -57,7 +62,13 @@ ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes
 # If jq returned empty (invalid JSON), allow
 [ -z "$ALL_FIELDS" ] && exit 0
 
-read -r ACTIVE PAUSED PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES <<< "$ALL_FIELDS"
+read -r ACTIVE PAUSED PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES GRACE_SESSION_ID GRACE_LAST_CALL_AT GRACE_STARTED_AT GRACE_TIMEOUT_SEC_CFG GRACE_MAX_SEC_CFG <<< "$ALL_FIELDS"
+
+# Use configured values or fall back to defaults
+GRACE_TIMEOUT_SEC="${GRACE_TIMEOUT_SEC_CFG}"
+[ "$GRACE_TIMEOUT_SEC" = "null" ] && GRACE_TIMEOUT_SEC="$GRACE_TIMEOUT_SEC_DEFAULT"
+GRACE_MAX_SEC="${GRACE_MAX_SEC_CFG}"
+[ "$GRACE_MAX_SEC" = "null" ] && GRACE_MAX_SEC="$GRACE_MAX_SEC_DEFAULT"
 
 # ---------------------------------------------------------------------------
 # Step 2: Check if active
@@ -205,12 +216,20 @@ if [ "$PHASE" = "work" ] && [ "$ELAPSED" -ge $((WORK_MINUTES * 60)) ]; then
         SELECTED_REST="$REST_MINUTES"
     fi
 
-    # Update state
+    # Update state (including grace for the active session to finish its task)
+    GRACE_SID="${SESSION_ID:-null}"
+    if [ "$GRACE_SID" = "" ] || [ "$GRACE_SID" = "null" ]; then
+        GRACE_SID="null"
+        GRACE_JQ="$GRACE_CLEAR"
+    else
+        GRACE_JQ='.grace_session_id = $gsid | .grace_last_call_at = $now | .grace_started_at = $now'
+    fi
     UPDATED="$(echo "$STATE" | jq \
         --arg phase "rest" \
         --argjson arm "$SELECTED_REST" \
         --argjson now "$NOW" \
-        '.phase = $phase | .active_rest_minutes = $arm | .phase_started_at = $now | .last_transition_at = $now'
+        --arg gsid "$GRACE_SID" \
+        ".phase = \$phase | .active_rest_minutes = \$arm | .phase_started_at = \$now | .last_transition_at = \$now | $GRACE_JQ"
     )"
     write_state "$UPDATED"
 
@@ -241,6 +260,29 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; then
+    # Grace period: let the active session finish its current task
+    if [ "$GRACE_SESSION_ID" != "null" ] && [ -n "$SESSION_ID" ] && \
+       [ "$SESSION_ID" = "$GRACE_SESSION_ID" ]; then
+        # Check hard cap first
+        if [ "$GRACE_STARTED_AT" != "null" ] && \
+           [ $((NOW - GRACE_STARTED_AT)) -ge "$GRACE_MAX_SEC" ]; then
+            # Hard cap reached — clear grace, fall through to block
+            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
+            write_state "$UPDATED"
+        elif [ "$GRACE_LAST_CALL_AT" != "null" ] && \
+             [ $((NOW - GRACE_LAST_CALL_AT)) -lt "$GRACE_TIMEOUT_SEC" ]; then
+            # Within grace window — allow and update timestamp
+            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq --argjson now "$NOW" \
+                '.grace_last_call_at = $now')"
+            write_state "$UPDATED"
+            exit 0
+        else
+            # Grace expired (inactivity) — clear grace, fall through to block
+            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
+            write_state "$UPDATED"
+        fi
+    fi
+
     REMAINING_SEC=$(( ACTIVE_REST_MINUTES * 60 - ELAPSED ))
     REMAINING_MIN=$(( REMAINING_SEC / 60 ))
     REMAINING_SEC_PART=$(( REMAINING_SEC % 60 ))
@@ -297,7 +339,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -ge $((ACTIVE_REST_MINUTES * 60)) ]; th
         --arg phase "work" \
         --argjson cycle "$NEW_CYCLE" \
         --argjson now "$NOW" \
-        '.phase = $phase | .current_cycle = $cycle | .phase_started_at = $now | .last_transition_at = $now | .active_rest_minutes = null'
+        ".phase = \$phase | .current_cycle = \$cycle | .phase_started_at = \$now | .last_transition_at = \$now | .active_rest_minutes = null | $GRACE_CLEAR"
     )"
     write_state "$UPDATED"
 
