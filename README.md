@@ -53,11 +53,13 @@ Create `~/.tomato/config.json` to set persistent defaults:
   "work_minutes": 25,
   "rest_minutes": 5,
   "long_rest_minutes": 15,
-  "cycles_before_long_rest": 4
+  "cycles_before_long_rest": 4,
+  "grace_max_sec": 300,
+  "grace_timeout_sec": 10
 }
 ```
 
-Every 4th cycle gets a long rest (15 min by default).
+Every 4th cycle gets a long rest (15 min by default). When rest starts, the active session gets up to `grace_max_sec` (default 5 min) to finish its current task before being blocked. Lower it for stricter enforcement.
 
 ## Uninstall
 
