@@ -39,7 +39,7 @@ fi
 HOOK_INPUT="$(cat 2>/dev/null)" || HOOK_INPUT=""
 if [ -n "$HOOK_INPUT" ]; then
     TOOL_CMD="$(echo "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
-    if echo "$TOOL_CMD" | grep -q 'tomato-cli.py' 2>/dev/null; then
+    if echo "$TOOL_CMD" | grep -qE '(^|/)python3? .+tomato-cli\.py( |$)' 2>/dev/null; then
         exit 0
     fi
 fi
