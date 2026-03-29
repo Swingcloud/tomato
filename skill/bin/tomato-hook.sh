@@ -71,9 +71,10 @@ if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${GITLAB_CI:-}" ] |
     exit 0
 fi
 
-if [ ! -t 0 ]; then
-    exit 0
-fi
+# NOTE: Do NOT check [ -t 0 ] (TTY) here. Claude Code runs hooks as
+# subprocesses without a TTY, so this check would skip enforcement on
+# every single invocation. CI env vars above are sufficient for detecting
+# automation environments.
 
 # ---------------------------------------------------------------------------
 # Step 4: Pause check
