@@ -20,6 +20,7 @@ ACTIVE_DIRS="$TOMATO_DIR/active_dirs.txt"
 LOCK_DIR="$TOMATO_DIR/state.lock"
 GRACE_TIMEOUT_SEC=10   # gap between tool calls before grace expires
 GRACE_MAX_SEC=120      # hard cap on total grace duration
+GRACE_CLEAR='.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null'
 
 log_error() {
     mkdir -p "$TOMATO_DIR"
@@ -213,7 +214,7 @@ if [ "$PHASE" = "work" ] && [ "$ELAPSED" -ge $((WORK_MINUTES * 60)) ]; then
     GRACE_SID="${SESSION_ID:-null}"
     if [ "$GRACE_SID" = "" ] || [ "$GRACE_SID" = "null" ]; then
         GRACE_SID="null"
-        GRACE_JQ='.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null'
+        GRACE_JQ="$GRACE_CLEAR"
     else
         GRACE_JQ='.grace_session_id = $gsid | .grace_last_call_at = $now | .grace_started_at = $now'
     fi
@@ -260,8 +261,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
         if [ "$GRACE_STARTED_AT" != "null" ] && \
            [ $((NOW - GRACE_STARTED_AT)) -ge "$GRACE_MAX_SEC" ]; then
             # Hard cap reached — clear grace, fall through to block
-            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq \
-                '.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null')"
+            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
             write_state "$UPDATED"
         elif [ "$GRACE_LAST_CALL_AT" != "null" ] && \
              [ $((NOW - GRACE_LAST_CALL_AT)) -lt "$GRACE_TIMEOUT_SEC" ]; then
@@ -272,8 +272,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
             exit 0
         else
             # Grace expired (inactivity) — clear grace, fall through to block
-            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq \
-                '.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null')"
+            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
             write_state "$UPDATED"
         fi
     fi
@@ -334,7 +333,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -ge $((ACTIVE_REST_MINUTES * 60)) ]; th
         --arg phase "work" \
         --argjson cycle "$NEW_CYCLE" \
         --argjson now "$NOW" \
-        '.phase = $phase | .current_cycle = $cycle | .phase_started_at = $now | .last_transition_at = $now | .active_rest_minutes = null | .grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null'
+        ".phase = \$phase | .current_cycle = \$cycle | .phase_started_at = \$now | .last_transition_at = \$now | .active_rest_minutes = null | $GRACE_CLEAR"
     )"
     write_state "$UPDATED"
 
