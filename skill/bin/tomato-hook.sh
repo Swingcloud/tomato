@@ -84,7 +84,7 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ "$PAUSED" = "true" ]; then
-    echo "🍅 Tomato paused. Run /tomato resume to continue." >&2
+    echo "🍅 Paused — /tomato resume to continue." >&2
     exit 2
 fi
 
@@ -232,7 +232,7 @@ if [ "$PHASE" = "work" ] && [ "$ELAPSED" -ge $((WORK_MINUTES * 60)) ]; then
     REST_END_TS=$(( NOW + SELECTED_REST * 60 ))
     REST_END_TIME="$(format_time "$REST_END_TS")"
 
-    echo "🍅 Break time! Rest until $REST_END_TIME ($SELECTED_REST min remaining). Run /tomato status to check." >&2
+    echo "🍅 Break — ${SELECTED_REST}m rest, back at $REST_END_TIME." >&2
     exit 2
 fi
 
@@ -261,7 +261,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
     INDEX=$(( RANDOM % ${#SUGGESTIONS[@]} ))
     SUGGESTION="${SUGGESTIONS[$INDEX]}"
 
-    echo "🍅 Resting... ${REMAINING_MIN}m ${REMAINING_SEC_PART}s remaining." >&2
+    echo "🍅 Resting — ${REMAINING_MIN}m ${REMAINING_SEC_PART}s left." >&2
     echo "💡 $SUGGESTION" >&2
     exit 2
 fi

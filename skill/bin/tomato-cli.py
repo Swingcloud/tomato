@@ -147,6 +147,31 @@ def fmt_remaining(seconds: int) -> str:
     return f"{m}m {s}s"
 
 
+def _plural(n: int, word: str) -> str:
+    """Smart pluralization: _plural(1, 'cycle') -> '1 cycle', _plural(3, 'cycle') -> '3 cycles'."""
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _completed_cycles(state: Dict[str, Any], now: Optional[int] = None) -> int:
+    """Count completed work cycles based on current phase.
+
+    During work phase, the current cycle is in-progress (not yet completed),
+    unless the work timer has already expired (overdue transition).
+    During rest phase, the current cycle's work is done.
+    """
+    cycle = state.get("current_cycle", 1)
+    phase = state.get("phase", "work")
+    if phase == "rest":
+        return cycle
+    # Work phase: check if the timer already expired (hook hasn't transitioned yet)
+    if now is not None:
+        work_min = state.get("work_minutes", 25)
+        phase_started = state.get("phase_started_at", now)
+        if now - phase_started >= work_min * 60:
+            return cycle  # work finished, just not transitioned yet
+    return max(0, cycle - 1)
+
+
 # ---------------------------------------------------------------------------
 # Hook auto-registration
 # ---------------------------------------------------------------------------
@@ -247,24 +272,23 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     # Validate durations
     if work <= 0:
-        print("Error: work minutes must be positive.", file=sys.stderr)
+        print("\U0001f345 Error: work minutes must be positive.", file=sys.stderr)
         return 1
     if rest <= 0:
-        print("Error: rest minutes must be positive.", file=sys.stderr)
+        print("\U0001f345 Error: rest minutes must be positive.", file=sys.stderr)
         return 1
     if args.cycles is not None and args.cycles <= 0:
-        print("Error: cycles must be positive.", file=sys.stderr)
+        print("\U0001f345 Error: cycles must be positive.", file=sys.stderr)
         return 1
 
     state = load_state()
     if state is not None and state.get("active"):
         if not args.force:
-            # Show current status and tell user to stop first
             phase = state.get("phase", "work")
             cycle = state.get("current_cycle", 1)
             print(
-                f"A session is already active (cycle {cycle}, {phase} phase). "
-                "Stop it first with /tomato stop, or use --force.",
+                f"\U0001f345 Session already active \u2014 cycle {cycle}, {phase} phase. "
+                "Stop first or use --force.",
                 file=sys.stderr,
             )
             return 1
@@ -274,7 +298,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             "event": "session_stop",
             "ts": now,
             "reason": "force",
-            "total_cycles": state.get("current_cycle", 1),
+            "total_cycles": _completed_cycles(state, now=now),
         })
 
     now = int(time.time())
@@ -312,8 +336,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     max_str = f"/{args.cycles}" if args.cycles else ""
     print(
-        f"\U0001f345 Tomato started! {work}m work / {rest}m rest. "
-        f"Cycle 1{max_str}. Stay focused!"
+        f"\U0001f345 Started \u2014 {work}m work / {rest}m rest, cycle 1{max_str}. Go."
     )
     return 0
 
@@ -327,11 +350,11 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     """Stop the active Pomodoro session."""
     state = load_state()
     if state is None or not state.get("active"):
-        print("No active session.")
+        print("\U0001f345 No active session.")
         return 0
 
     now = int(time.time())
-    cycles = state.get("current_cycle", 1)
+    completed = _completed_cycles(state, now=now)
 
     state["active"] = False
     save_state(state)
@@ -340,10 +363,10 @@ def cmd_stop(_args: argparse.Namespace) -> int:
         "event": "session_stop",
         "ts": now,
         "reason": "user",
-        "total_cycles": cycles,
+        "total_cycles": completed,
     })
 
-    print(f"\U0001f345 Session ended. {cycles} cycle(s) completed.")
+    print(f"\U0001f345 Stopped \u2014 {_plural(completed, 'cycle')} completed.")
     return 0
 
 
@@ -356,11 +379,11 @@ def cmd_pause(_args: argparse.Namespace) -> int:
     """Pause the active Pomodoro session."""
     state = load_state()
     if state is None or not state.get("active"):
-        print("No active session.")
-        return 0
+        print("\U0001f345 No active session. Start one with /tomato start.", file=sys.stderr)
+        return 1
 
     if state.get("paused"):
-        print("Already paused.")
+        print("\U0001f345 Already paused.")
         return 0
 
     now = int(time.time())
@@ -380,8 +403,8 @@ def cmd_pause(_args: argparse.Namespace) -> int:
     })
 
     print(
-        f"\U0001f345 Paused. {phase} timer frozen at {fmt_remaining(elapsed)}. "
-        "Run /tomato resume when ready."
+        f"\U0001f345 Paused \u2014 {phase} phase, {fmt_remaining(elapsed)} elapsed. "
+        "/tomato resume when ready."
     )
     return 0
 
@@ -395,11 +418,11 @@ def cmd_resume(_args: argparse.Namespace) -> int:
     """Resume a paused Pomodoro session."""
     state = load_state()
     if state is None or not state.get("active"):
-        print("No active session.", file=sys.stderr)
+        print("\U0001f345 No active session. Start one with /tomato start.", file=sys.stderr)
         return 1
 
     if not state.get("paused"):
-        print("Session is not paused.", file=sys.stderr)
+        print("\U0001f345 Not paused \u2014 session is running.", file=sys.stderr)
         return 1
 
     now = int(time.time())
@@ -427,7 +450,7 @@ def cmd_resume(_args: argparse.Namespace) -> int:
     remaining = max(0, total_sec - elapsed_before)
 
     print(
-        f"\U0001f345 Resumed! {fmt_remaining(remaining)} left in {phase} phase."
+        f"\U0001f345 Resumed \u2014 {fmt_remaining(remaining)} left in {phase} phase."
     )
     return 0
 
@@ -519,7 +542,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     """Show current Pomodoro session status."""
     state = load_state()
     if state is None or not state.get("active"):
-        print("No active session.")
+        print("\U0001f345 No active session. Start one with /tomato start.")
         return 0
 
     now = int(time.time())
@@ -532,7 +555,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     if state.get("paused"):
         elapsed = state.get("elapsed_before_pause", 0)
         print(
-            f"\U0001f345 PAUSED \u2014 {phase}, {fmt_remaining(elapsed)} elapsed."
+            f"\U0001f345 Paused \u2014 {phase} phase, {fmt_remaining(elapsed)} elapsed."
         )
         return 0
 
@@ -551,8 +574,8 @@ def cmd_status(_args: argparse.Namespace) -> int:
             return _show_rest_status(state, now, cycle, max_str)
 
         print(
-            f"\U0001f345 Working \u2014 Cycle {cycle}{max_str}. "
-            f"{fmt_remaining(remaining)} remaining."
+            f"\U0001f345 Working \u2014 cycle {cycle}{max_str}, "
+            f"{fmt_remaining(remaining)} left."
         )
         return 0
     else:
@@ -573,9 +596,9 @@ def _show_rest_status(
         state = _transition_rest_to_work(state)
 
         if not state.get("active"):
-            max_cycles = state.get("max_cycles", cycle)
+            completed = state.get("max_cycles", cycle)
             print(
-                f"\U0001f345 Session complete! {max_cycles} cycle(s) finished."
+                f"\U0001f345 Done \u2014 {_plural(completed, 'cycle')} finished."
             )
             return 0
 
@@ -588,18 +611,25 @@ def _show_rest_status(
         new_remaining = work_min * 60 - new_elapsed
         save_state(state)
         print(
-            f"\U0001f345 Working \u2014 Cycle {new_cycle}{new_max_str}. "
-            f"{fmt_remaining(new_remaining)} remaining."
+            f"\U0001f345 Working \u2014 cycle {new_cycle}{new_max_str}, "
+            f"{fmt_remaining(new_remaining)} left."
         )
         return 0
 
-    next_cycle = cycle + 1
+    # Check if this is the last rest before session ends
     max_cycles = state.get("max_cycles")
-    next_str = f"/{max_cycles}" if max_cycles else ""
-    print(
-        f"\U0001f345 Resting \u2014 {fmt_remaining(remaining)} remaining. "
-        f"Cycle {next_cycle}{next_str} next."
-    )
+    if max_cycles is not None and cycle >= max_cycles:
+        print(
+            f"\U0001f345 Resting \u2014 {fmt_remaining(remaining)} left. "
+            f"Session ends after this break."
+        )
+    else:
+        next_cycle = cycle + 1
+        next_str = f"/{max_cycles}" if max_cycles else ""
+        print(
+            f"\U0001f345 Resting \u2014 {fmt_remaining(remaining)} left, "
+            f"cycle {next_cycle}{next_str} next."
+        )
     return 0
 
 
@@ -675,18 +705,20 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _today_utc() -> datetime:
-    return datetime.now(tz=timezone.utc)
+def _now_local() -> datetime:
+    """Current local time for date-based comparisons (not UTC)."""
+    return datetime.now().astimezone()
 
 
 def _entries_for_date(entries: List[Dict[str, Any]], target: datetime) -> List[Dict[str, Any]]:
-    """Filter entries whose timestamp falls on *target* date (UTC)."""
+    """Filter entries whose timestamp falls on *target* date (local time)."""
     target_date = target.date()
     # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
+    # Use fromtimestamp() without tz arg to get local time
     return [
         e
         for e in entries
-        if datetime.fromtimestamp(e.get("ts", e.get("timestamp", 0)), tz=timezone.utc).date()
+        if datetime.fromtimestamp(e.get("ts", e.get("timestamp", 0))).date()
         == target_date
     ]
 
@@ -732,15 +764,16 @@ def _compute_streak(all_entries: List[Dict[str, Any]]) -> int:
     for e in all_entries:
         if e.get("event") == "work_end":
             # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
+            # Use local time for streak calculation
             d = datetime.fromtimestamp(
-                e.get("ts", e.get("timestamp", 0)), tz=timezone.utc
+                e.get("ts", e.get("timestamp", 0))
             ).date()
             cycle_dates.add(d)
 
     if not cycle_dates:
         return 0
 
-    today = _today_utc().date()
+    today = _now_local().date()
     streak = 0
     check = today
     while check in cycle_dates:
@@ -778,10 +811,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return _export(entries, args.export)
 
     if not entries:
-        print("No sessions yet. Run /tomato start to begin!")
+        print("\U0001f345 No sessions yet. Start one with /tomato start.")
         return 0
 
-    now = _today_utc()
+    now = _now_local()
 
     if args.week:
         return _stats_week(entries, config, now)
@@ -796,17 +829,17 @@ def _stats_today(
     stats = _compute_stats(today_entries, config)
     streak = _compute_streak(entries)
 
-    date_str = now.strftime("%Y-%m-%d")
+    date_str = now.strftime("%b %d")
     focused = fmt_duration(stats["focused_minutes"])
     cycles = stats["completed_cycles"]
     breaks_honored = stats["breaks_honored"]
     total_breaks = stats["total_breaks"]
 
-    print(f"\U0001f345 Tomato Stats \u2014 Today ({date_str})")
-    print("\u2501" * 36)
-    print(f"  Focused time:    {focused} ({cycles} cycles)")
-    print(f"  Breaks taken:    {breaks_honored} of {total_breaks}")
-    print(f"  Current streak:  {streak} days")
+    print(f"\U0001f345 Today \u2014 {date_str}")
+    print("\u2501" * 30)
+    print(f"  Focus      {focused}  ({_plural(cycles, 'cycle')})")
+    print(f"  Breaks     {breaks_honored} of {total_breaks}")
+    print(f"  Streak     {_plural(streak, 'day')}")
     return 0
 
 
@@ -845,26 +878,25 @@ def _stats_week(
     max_cycles = max((d["cycles"] for d in daily), default=1) or 1
 
     print(
-        f"\U0001f345 Tomato Stats \u2014 Week ({start_str}\u2013{end_str})"
+        f"\U0001f345 Week \u2014 {start_str}\u2013{end_str}"
     )
-    print("\u2501" * 36)
+    print("\u2501" * 38)
     print(
-        f"  Total focused:   {fmt_duration(total_focused)} ({total_cycles} cycles)"
+        f"  Focus      {fmt_duration(total_focused)}  ({_plural(total_cycles, 'cycle')})"
     )
-    print(f"  Breaks taken:    {total_breaks_honored} of {total_breaks}")
+    print(f"  Breaks     {total_breaks_honored} of {total_breaks}")
     print()
-    print("  Daily:")
     for d in daily:
         bar = _bar(d["cycles"], max_cycles)
         print(
-            f"  {d['name']}  {fmt_duration(d['focused_minutes']):>7s}  {bar}  {d['cycles']} cycles"
+            f"  {d['name']}  {fmt_duration(d['focused_minutes']):>7s}  {bar}  {d['cycles']}"
         )
     return 0
 
 
 def _export(entries: List[Dict[str, Any]], fmt: str) -> int:
     if not entries:
-        print("No sessions yet. Run /tomato start to begin!")
+        print("\U0001f345 No sessions yet. Start one with /tomato start.")
         return 0
 
     if fmt == "json":
@@ -902,9 +934,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
     before_date: Optional[datetime] = None
     if args.before:
         try:
-            before_date = datetime.strptime(args.before, "%Y-%m-%d").replace(
-                tzinfo=timezone.utc
-            )
+            before_date = datetime.strptime(args.before, "%Y-%m-%d").astimezone()
         except ValueError:
             print(
                 f"Invalid date format: {args.before} (expected YYYY-MM-DD)",
@@ -936,7 +966,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
         for e in entries:
             # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
             ts = e.get("ts", e.get("timestamp", 0))
-            entry_date = datetime.fromtimestamp(ts, tz=timezone.utc)
+            entry_date = datetime.fromtimestamp(ts).astimezone()
             if entry_date < before_date:
                 events_cleared += 1
             else:
@@ -962,7 +992,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
                     # Parse timestamp from filename
                     try:
                         cp_ts = int(cp.stem)
-                        cp_dt = datetime.fromtimestamp(cp_ts, tz=timezone.utc)
+                        cp_dt = datetime.fromtimestamp(cp_ts).astimezone()
                         if cp_dt < before_date:
                             cp.unlink()
                             checkpoints_cleared += 1
@@ -973,7 +1003,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
         return 1
 
     print(
-        f"Cleared {events_cleared:,} events and {checkpoints_cleared:,} checkpoints."
+        f"\U0001f345 Cleared {events_cleared:,} events and {checkpoints_cleared:,} checkpoints."
     )
     return 0
 

@@ -2,6 +2,23 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [1.0.1] - 2026-03-29
+
+### Fixed
+- Cycle counting now correctly reports completed cycles when stopping mid-work (was overcounting by 1)
+- Stopping after an expired work timer now credits the finished cycle instead of undercounting
+- Stats, streaks, and `clear --before` use local time instead of UTC for date boundaries
+- `pause` with no active session returns exit code 1 (was 0), consistent with `resume`
+- Final rest of a finite session (`--cycles N`) shows "Session ends after this break" instead of impossible next-cycle text
+
+### Changed
+- All CLI messages use consistent formatting: `🍅 [State] — [details]`
+- Smart pluralization everywhere: "1 cycle" / "3 cycles" instead of "cycle(s)"
+- Error messages include action hints: "No active session. Start one with /tomato start."
+- Hook block messages shortened for less noise on repeated tool calls
+- Stats labels tightened: "Focus" instead of "Focused time:", "Streak" instead of "Current streak:"
+- Stats date header uses short format: "Mar 29" instead of "2026-03-29"
+
 ## [1.0.0] - 2026-03-29
 
 ### Added
