@@ -31,6 +31,20 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# Step 0: Read hook input and whitelist tomato-cli.py commands
+# ---------------------------------------------------------------------------
+# Claude Code passes tool info via stdin JSON. Allow tomato-cli.py calls
+# even during rest/pause — otherwise the user can't stop/resume.
+
+HOOK_INPUT="$(cat 2>/dev/null)" || HOOK_INPUT=""
+if [ -n "$HOOK_INPUT" ]; then
+    TOOL_CMD="$(echo "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+    if echo "$TOOL_CMD" | grep -q 'tomato-cli.py' 2>/dev/null; then
+        exit 0
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 1: Read state.json — single jq call extracts all fields
 # ---------------------------------------------------------------------------
 

@@ -38,6 +38,8 @@ Tomato installs a global `PreToolUse` hook in `~/.claude/settings.json`. On ever
 
 The hook is fast: ~8ms on the normal path (read JSON, check timer, allow). Phase transitions (work to rest, rest to work) take ~35ms and happen once every 25 minutes.
 
+During rest, all tool calls are blocked — but `/tomato stop`, `/tomato resume`, and `/tomato status` still work. The hook whitelists its own CLI so you're never locked out.
+
 When a work sprint ends, Tomato saves a checkpoint of your git state across all active projects. When the break ends, Claude presents what you were working on so you can resume without losing context.
 
 ## Configuration
