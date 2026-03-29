@@ -2,6 +2,11 @@
 """Tomato CLI — AI-enforced Pomodoro timer utilities.
 
 Subcommands:
+  start               Start a new Pomodoro session
+  stop                Stop the active session
+  pause               Pause the active session
+  resume              Resume a paused session
+  status              Show current session status
   checkpoint --save   Capture git state from all active working directories
   stats               Show focus stats (today or --week)
   clear               Delete history and checkpoints
@@ -22,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 TOMATO_DIR = Path.home() / ".tomato"
+STATE_FILE = TOMATO_DIR / "state.json"
 ACTIVE_DIRS_FILE = TOMATO_DIR / "active_dirs.txt"
 CHECKPOINTS_DIR = TOMATO_DIR / "checkpoints"
 HISTORY_FILE = TOMATO_DIR / "history.jsonl"
@@ -106,6 +112,402 @@ def fmt_duration(minutes: int) -> str:
 def date_from_ts(ts: float) -> datetime:
     """Convert a unix timestamp to a UTC datetime."""
     return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+def load_state() -> Optional[Dict[str, Any]]:
+    """Read state.json, return None if missing or corrupt."""
+    try:
+        if STATE_FILE.is_file():
+            with open(STATE_FILE, "r") as fh:
+                return json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"Warning: could not read state.json — {exc}", file=sys.stderr)
+    return None
+
+
+def save_state(state: Dict[str, Any]) -> None:
+    """Write state.json atomically (temp file + rename)."""
+    TOMATO_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as fh:
+        json.dump(state, fh, indent=2)
+    os.rename(str(tmp), str(STATE_FILE))
+
+
+def append_history(event: Dict[str, Any]) -> None:
+    """Append one JSON line to history.jsonl."""
+    TOMATO_DIR.mkdir(parents=True, exist_ok=True)
+    with open(HISTORY_FILE, "a") as fh:
+        fh.write(json.dumps(event) + "\n")
+
+
+def fmt_remaining(seconds: int) -> str:
+    """Format seconds as 'Xm Ys'."""
+    if seconds < 0:
+        seconds = 0
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s"
+
+
+# ---------------------------------------------------------------------------
+# start
+# ---------------------------------------------------------------------------
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start a new Pomodoro session."""
+    config = load_config()
+
+    work = args.work if args.work is not None else config.get("work_minutes", 25)
+    rest = args.rest if args.rest is not None else config.get("rest_minutes", 5)
+    long_rest = config.get("long_rest_minutes", 15)
+    cycles_before_long = config.get("cycles_before_long_rest", 4)
+
+    state = load_state()
+    if state is not None and state.get("active"):
+        if not args.force:
+            # Show current status and tell user to stop first
+            phase = state.get("phase", "work")
+            cycle = state.get("current_cycle", 1)
+            print(
+                f"A session is already active (cycle {cycle}, {phase} phase). "
+                "Stop it first with /tomato stop, or use --force.",
+                file=sys.stderr,
+            )
+            return 1
+        # Force-stop the existing session
+        now = int(time.time())
+        append_history({
+            "event": "session_stop",
+            "timestamp": now,
+            "reason": "force",
+            "total_cycles": state.get("current_cycle", 1),
+        })
+
+    now = int(time.time())
+    TOMATO_DIR.mkdir(parents=True, exist_ok=True)
+    CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    new_state: Dict[str, Any] = {
+        "active": True,
+        "phase": "work",
+        "paused": False,
+        "paused_at": None,
+        "elapsed_before_pause": 0,
+        "started_at": now,
+        "phase_started_at": now,
+        "last_transition_at": now,
+        "work_minutes": work,
+        "rest_minutes": rest,
+        "long_rest_minutes": long_rest,
+        "cycles_before_long_rest": cycles_before_long,
+        "current_cycle": 1,
+        "max_cycles": args.cycles,
+        "active_rest_minutes": None,
+    }
+    save_state(new_state)
+
+    append_history({
+        "event": "work_start",
+        "timestamp": now,
+        "cycle": 1,
+    })
+
+    # Clear active_dirs.txt
+    with open(ACTIVE_DIRS_FILE, "w") as fh:
+        pass
+
+    max_str = f"/{args.cycles}" if args.cycles else ""
+    print(
+        f"\U0001f345 Tomato started! {work}m work / {rest}m rest. "
+        f"Cycle 1{max_str}. Stay focused!"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# stop
+# ---------------------------------------------------------------------------
+
+
+def cmd_stop(_args: argparse.Namespace) -> int:
+    """Stop the active Pomodoro session."""
+    state = load_state()
+    if state is None or not state.get("active"):
+        print("No active session.")
+        return 0
+
+    now = int(time.time())
+    cycles = state.get("current_cycle", 1)
+
+    state["active"] = False
+    save_state(state)
+
+    append_history({
+        "event": "session_stop",
+        "timestamp": now,
+        "reason": "user",
+        "total_cycles": cycles,
+    })
+
+    print(f"\U0001f345 Session ended. {cycles} cycle(s) completed.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# pause
+# ---------------------------------------------------------------------------
+
+
+def cmd_pause(_args: argparse.Namespace) -> int:
+    """Pause the active Pomodoro session."""
+    state = load_state()
+    if state is None or not state.get("active"):
+        print("No active session.")
+        return 0
+
+    if state.get("paused"):
+        print("Already paused.")
+        return 0
+
+    now = int(time.time())
+    phase = state.get("phase", "work")
+    elapsed = now - state.get("phase_started_at", now)
+
+    state["paused"] = True
+    state["paused_at"] = now
+    state["elapsed_before_pause"] = elapsed
+    save_state(state)
+
+    append_history({
+        "event": "pause",
+        "timestamp": now,
+        "phase": phase,
+        "elapsed": elapsed,
+    })
+
+    print(
+        f"\U0001f345 Paused. {phase} timer frozen at {fmt_remaining(elapsed)}. "
+        "Run /tomato resume when ready."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# resume
+# ---------------------------------------------------------------------------
+
+
+def cmd_resume(_args: argparse.Namespace) -> int:
+    """Resume a paused Pomodoro session."""
+    state = load_state()
+    if state is None or not state.get("active"):
+        print("No active session.", file=sys.stderr)
+        return 1
+
+    if not state.get("paused"):
+        print("Session is not paused.", file=sys.stderr)
+        return 1
+
+    now = int(time.time())
+    phase = state.get("phase", "work")
+    elapsed_before = state.get("elapsed_before_pause", 0)
+
+    state["phase_started_at"] = now - elapsed_before
+    state["paused"] = False
+    state["paused_at"] = None
+    state["elapsed_before_pause"] = 0
+    save_state(state)
+
+    append_history({
+        "event": "resume",
+        "timestamp": now,
+        "phase": phase,
+    })
+
+    # Calculate remaining time
+    if phase == "work":
+        total_sec = state.get("work_minutes", 25) * 60
+    else:
+        active_rest = state.get("active_rest_minutes") or state.get("rest_minutes", 5)
+        total_sec = active_rest * 60
+    remaining = max(0, total_sec - elapsed_before)
+
+    print(
+        f"\U0001f345 Resumed! {fmt_remaining(remaining)} left in {phase} phase."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+def _transition_work_to_rest(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle work -> rest transition, update state and history."""
+    cycle = state.get("current_cycle", 1)
+    cycles_before_long = state.get("cycles_before_long_rest", 4)
+    work_minutes = state.get("work_minutes", 25)
+
+    # Transition time is when work actually ended
+    transition_at = state.get("phase_started_at", 0) + work_minutes * 60
+
+    if cycles_before_long > 0 and cycle % cycles_before_long == 0:
+        rest_min = state.get("long_rest_minutes", 15)
+    else:
+        rest_min = state.get("rest_minutes", 5)
+
+    state["phase"] = "rest"
+    state["phase_started_at"] = transition_at
+    state["last_transition_at"] = transition_at
+    state["active_rest_minutes"] = rest_min
+
+    append_history({
+        "event": "work_end",
+        "timestamp": transition_at,
+        "cycle": cycle,
+        "duration_sec": work_minutes * 60,
+    })
+    append_history({
+        "event": "rest_start",
+        "timestamp": transition_at,
+        "cycle": cycle,
+        "rest_minutes": rest_min,
+    })
+
+    return state
+
+
+def _transition_rest_to_work(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle rest -> work transition, update state and history."""
+    active_rest = state.get("active_rest_minutes") or state.get("rest_minutes", 5)
+    transition_at = state.get("phase_started_at", 0) + active_rest * 60
+    cycle = state.get("current_cycle", 1) + 1
+
+    max_cycles = state.get("max_cycles")
+    if max_cycles is not None and cycle > max_cycles:
+        state["active"] = False
+        save_state(state)
+        append_history({
+            "event": "rest_end",
+            "timestamp": transition_at,
+            "cycle": cycle - 1,
+        })
+        append_history({
+            "event": "session_stop",
+            "timestamp": transition_at,
+            "reason": "completed",
+            "total_cycles": max_cycles,
+        })
+        return state
+
+    state["phase"] = "work"
+    state["phase_started_at"] = transition_at
+    state["last_transition_at"] = transition_at
+    state["current_cycle"] = cycle
+    state["active_rest_minutes"] = None
+
+    append_history({
+        "event": "rest_end",
+        "timestamp": transition_at,
+        "cycle": cycle - 1,
+    })
+    append_history({
+        "event": "work_start",
+        "timestamp": transition_at,
+        "cycle": cycle,
+    })
+
+    return state
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    """Show current Pomodoro session status."""
+    state = load_state()
+    if state is None or not state.get("active"):
+        print("No active session.")
+        return 0
+
+    now = int(time.time())
+    phase = state.get("phase", "work")
+    cycle = state.get("current_cycle", 1)
+    max_cycles = state.get("max_cycles")
+    max_str = f"/{max_cycles}" if max_cycles else ""
+
+    # Handle paused state
+    if state.get("paused"):
+        elapsed = state.get("elapsed_before_pause", 0)
+        print(
+            f"\U0001f345 PAUSED \u2014 {phase}, {fmt_remaining(elapsed)} elapsed."
+        )
+        return 0
+
+    phase_started = state.get("phase_started_at", now)
+
+    if phase == "work":
+        work_min = state.get("work_minutes", 25)
+        elapsed = now - phase_started
+        remaining = work_min * 60 - elapsed
+
+        if remaining <= 0:
+            # Work phase expired — transition to rest
+            state = _transition_work_to_rest(state)
+            save_state(state)
+            # Now show rest status
+            return _show_rest_status(state, now, cycle, max_str)
+
+        print(
+            f"\U0001f345 Working \u2014 Cycle {cycle}{max_str}. "
+            f"{fmt_remaining(remaining)} remaining."
+        )
+        return 0
+    else:
+        return _show_rest_status(state, now, cycle, max_str)
+
+
+def _show_rest_status(
+    state: Dict[str, Any], now: int, cycle: int, max_str: str
+) -> int:
+    """Show rest phase status, handling expired rest transitions."""
+    active_rest = state.get("active_rest_minutes") or state.get("rest_minutes", 5)
+    phase_started = state.get("phase_started_at", now)
+    elapsed = now - phase_started
+    remaining = active_rest * 60 - elapsed
+
+    if remaining <= 0:
+        # Rest expired — transition to next work cycle
+        state = _transition_rest_to_work(state)
+
+        if not state.get("active"):
+            max_cycles = state.get("max_cycles", cycle)
+            print(
+                f"\U0001f345 Session complete! {max_cycles} cycle(s) finished."
+            )
+            return 0
+
+        # Show new work status
+        new_cycle = state.get("current_cycle", cycle + 1)
+        max_cycles = state.get("max_cycles")
+        new_max_str = f"/{max_cycles}" if max_cycles else ""
+        work_min = state.get("work_minutes", 25)
+        new_elapsed = now - state.get("phase_started_at", now)
+        new_remaining = work_min * 60 - new_elapsed
+        save_state(state)
+        print(
+            f"\U0001f345 Working \u2014 Cycle {new_cycle}{new_max_str}. "
+            f"{fmt_remaining(new_remaining)} remaining."
+        )
+        return 0
+
+    next_cycle = cycle + 1
+    max_cycles = state.get("max_cycles")
+    next_str = f"/{max_cycles}" if max_cycles else ""
+    print(
+        f"\U0001f345 Resting \u2014 {fmt_remaining(remaining)} remaining. "
+        f"Cycle {next_cycle}{next_str} next."
+    )
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +896,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
+    # start
+    sp = sub.add_parser("start", help="Start a new Pomodoro session")
+    sp.add_argument("--work", type=int, default=None, help="Work minutes")
+    sp.add_argument("--rest", type=int, default=None, help="Rest minutes")
+    sp.add_argument("--cycles", type=int, default=None, help="Max cycles")
+    sp.add_argument(
+        "--force", action="store_true", help="Force-stop existing session"
+    )
+
+    # stop
+    sub.add_parser("stop", help="Stop the active session")
+
+    # pause
+    sub.add_parser("pause", help="Pause the active session")
+
+    # resume
+    sub.add_parser("resume", help="Resume a paused session")
+
+    # status
+    sub.add_parser("status", help="Show current session status")
+
     # checkpoint
     cp = sub.add_parser("checkpoint", help="Capture git state snapshot")
     cp.add_argument(
@@ -541,7 +964,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     try:
-        if args.command == "checkpoint":
+        if args.command == "start":
+            return cmd_start(args)
+        elif args.command == "stop":
+            return cmd_stop(args)
+        elif args.command == "pause":
+            return cmd_pause(args)
+        elif args.command == "resume":
+            return cmd_resume(args)
+        elif args.command == "status":
+            return cmd_status(args)
+        elif args.command == "checkpoint":
             return cmd_checkpoint(args)
         elif args.command == "stats":
             return cmd_stats(args)
