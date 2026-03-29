@@ -43,7 +43,7 @@ HOOK_INPUT="$(cat 2>/dev/null)" || HOOK_INPUT=""
 SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
     TOOL_CMD="$(echo "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
-    if echo "$TOOL_CMD" | grep -qE '(^|/)python3? .+tomato-cli\.py( |$)' 2>/dev/null; then
+    if echo "$TOOL_CMD" | grep -qE '^python3? .+/tomato-cli\.py( |$)' 2>/dev/null; then
         exit 0
     fi
     SESSION_ID="$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
@@ -111,6 +111,14 @@ NOW="$(date +%s)"
 
 acquire_lock() {
     local attempts=0
+    # Clean stale locks older than 5 seconds (hook should never hold lock that long)
+    if [ -d "$LOCK_DIR" ]; then
+        local lock_age
+        lock_age=$(( $(date +%s) - $(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "0") ))
+        if [ "$lock_age" -gt 5 ]; then
+            rmdir "$LOCK_DIR" 2>/dev/null
+        fi
+    fi
     while [ "$attempts" -lt 10 ]; do
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             return 0
@@ -259,6 +267,9 @@ fi
 # Step 9: Rest in progress
 # ---------------------------------------------------------------------------
 
+# Fall back to rest_minutes if active_rest_minutes is null (shouldn't happen, but guard)
+[ "$ACTIVE_REST_MINUTES" = "null" ] && ACTIVE_REST_MINUTES="$REST_MINUTES"
+
 if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; then
     # Grace period: let the active session finish its current task
     if [ "$GRACE_SESSION_ID" != "null" ] && [ -n "$SESSION_ID" ] && \
@@ -267,19 +278,28 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
         if [ "$GRACE_STARTED_AT" != "null" ] && \
            [ $((NOW - GRACE_STARTED_AT)) -ge "$GRACE_MAX_SEC" ]; then
             # Hard cap reached — clear grace, fall through to block
-            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
-            write_state "$UPDATED"
+            if acquire_lock; then
+                UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
+                write_state "$UPDATED"
+                release_lock
+            fi
         elif [ "$GRACE_LAST_CALL_AT" != "null" ] && \
              [ $((NOW - GRACE_LAST_CALL_AT)) -lt "$GRACE_TIMEOUT_SEC" ]; then
             # Within grace window — allow and update timestamp
-            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq --argjson now "$NOW" \
-                '.grace_last_call_at = $now')"
-            write_state "$UPDATED"
+            if acquire_lock; then
+                UPDATED="$(echo "$(cat "$STATE_FILE")" | jq --argjson now "$NOW" \
+                    '.grace_last_call_at = $now')"
+                write_state "$UPDATED"
+                release_lock
+            fi
             exit 0
         else
             # Grace expired (inactivity) — clear grace, fall through to block
-            UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
-            write_state "$UPDATED"
+            if acquire_lock; then
+                UPDATED="$(echo "$(cat "$STATE_FILE")" | jq "$GRACE_CLEAR")"
+                write_state "$UPDATED"
+                release_lock
+            fi
         fi
     fi
 

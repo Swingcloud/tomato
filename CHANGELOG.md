@@ -2,6 +2,11 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [1.1.3] - 2026-03-29
+
+### Added
+- 30 bats shell tests for `tomato-hook.sh` covering all hook code paths: graceful degradation, work/rest transitions, pause, stale detection, CI bypass, CLI whitelist, and grace period
+
 ## [1.1.2] - 2026-03-29
 
 ### Fixed
