@@ -70,20 +70,13 @@ else
   echo "  $SKILL_DIR/ not found. Skipping."
 fi
 
-# ---------- Optionally remove history ----------
+# ---------- Remove history ----------
 
 if [ -d "$TOMATO_DIR" ]; then
-  echo ""
-  read -rp "Keep your Tomato history? (y/N) " KEEP_HISTORY
-  case "$KEEP_HISTORY" in
-    [yY]|[yY][eE][sS])
-      echo "  History preserved at $TOMATO_DIR/"
-      ;;
-    *)
-      rm -rf "$TOMATO_DIR"
-      echo "  Removed $TOMATO_DIR/"
-      ;;
-  esac
+  rm -rf "$TOMATO_DIR"
+  echo "  Removed $TOMATO_DIR/"
+else
+  echo "  $TOMATO_DIR/ not found. Skipping."
 fi
 
 # ---------- Done ----------
