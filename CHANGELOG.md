@@ -2,6 +2,14 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [1.1.0] - 2026-03-29
+
+### Added
+- Session-aware grace period for long-running tasks: when rest time starts, the session that was mid-task gets up to 120 seconds to finish. Other sessions are blocked immediately. Grace expires after 10 seconds of inactivity or 120 seconds total, whichever comes first.
+
+### Changed
+- Extracted `GRACE_CLEAR` constant to reduce repeated jq patterns in hook
+
 ## [1.0.0] - 2026-03-29
 
 ### Added
