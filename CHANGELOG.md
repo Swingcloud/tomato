@@ -2,6 +2,11 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [1.1.4] - 2026-03-29
+
+### Changed
+- Pause now freezes the timer without blocking tool calls (previously blocked all tools including Agent, breaking mid-workflow operations like `/review`)
+
 ## [1.1.3] - 2026-03-29
 
 ### Added

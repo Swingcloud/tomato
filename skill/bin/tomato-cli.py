@@ -289,11 +289,21 @@ def cmd_start(args: argparse.Namespace) -> int:
         if not args.force:
             phase = state.get("phase", "work")
             cycle = state.get("current_cycle", 1)
-            print(
-                f"\U0001f345 Session already active \u2014 cycle {cycle}, {phase} phase. "
-                "Stop first or use --force.",
-                file=sys.stderr,
-            )
+            paused = state.get("paused", False)
+            if paused:
+                elapsed = state.get("elapsed_before_pause", 0)
+                print(
+                    f"\U0001f345 Session paused \u2014 cycle {cycle}, {phase} phase, "
+                    f"{fmt_remaining(elapsed)} elapsed. "
+                    "/tomato resume to continue, or --force to restart.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"\U0001f345 Session already active \u2014 cycle {cycle}, {phase} phase. "
+                    "Stop first or use --force.",
+                    file=sys.stderr,
+                )
             return 1
         # Force-stop the existing session
         now = int(time.time())

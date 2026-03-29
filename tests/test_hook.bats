@@ -235,11 +235,10 @@ run_hook() {
 # Pause
 # =========================================================================
 
-@test "paused session — blocks tool call" {
+@test "paused session — allows tool call (pause freezes timer, not enforcement)" {
     write_state '{"paused": true}'
     run run_hook
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"Paused"* ]]
+    [ "$status" -eq 0 ]
 }
 
 # =========================================================================

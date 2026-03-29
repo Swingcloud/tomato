@@ -102,6 +102,16 @@ class TestStart:
         assert result.returncode == 1
         assert "already active" in result.stderr.lower()
 
+    def test_start_while_paused(self, tmp_path: Path) -> None:
+        """start while paused -> fails with exit 1 and mentions paused state."""
+        run_cli("start", home=tmp_path)
+        run_cli("pause", home=tmp_path)
+        result = run_cli("start", home=tmp_path)
+
+        assert result.returncode == 1
+        assert "paused" in result.stderr.lower()
+        assert "resume" in result.stderr.lower()
+
     def test_start_force(self, tmp_path: Path) -> None:
         """start --force while active -> stops old, starts new."""
         run_cli("start", home=tmp_path)

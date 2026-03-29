@@ -95,8 +95,9 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ "$PAUSED" = "true" ]; then
-    echo "🍅 Paused — /tomato resume to continue." >&2
-    exit 2
+    # Pause freezes the timer but does not block tool calls.
+    # The user can resume whenever they want — enforcement is the timer, not the pause.
+    exit 0
 fi
 
 # ---------------------------------------------------------------------------
