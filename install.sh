@@ -5,7 +5,7 @@ SKILL_NAME="tomato"
 SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
 TOMATO_DIR="$HOME/.tomato"
 SETTINGS_FILE="$HOME/.claude/settings.json"
-HOOK_CMD="\$HOME/.claude/skills/tomato/bin/tomato-hook.sh"
+HOOK_CMD="$HOME/.claude/skills/tomato/bin/tomato-hook.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- Dependency checks ----------
@@ -47,12 +47,14 @@ fi
 
 echo "Configuring Claude Code hook..."
 
-# The hook entry we want to add
-HOOK_ENTRY=$(cat <<'HOOKJSON'
+# The hook entry we want to add (using correct nested format with matcher)
+HOOK_ENTRY=$(cat <<HOOKJSON
 {
-  "type": "command",
-  "event": "PreToolUse",
-  "command": "$HOME/.claude/skills/tomato/bin/tomato-hook.sh"
+  "matcher": "*",
+  "hooks": [{
+    "type": "command",
+    "command": "$HOOK_CMD"
+  }]
 }
 HOOKJSON
 )
@@ -60,12 +62,12 @@ HOOKJSON
 if [ ! -f "$SETTINGS_FILE" ]; then
   # settings.json does not exist — create it with our hook
   mkdir -p "$(dirname "$SETTINGS_FILE")"
-  jq -n --argjson hook "$HOOK_ENTRY" '{hooks: {PreToolUse: [$hook]}}' > "$SETTINGS_FILE"
+  echo "$HOOK_ENTRY" | jq -n --argjson hook "$(cat -)" '{hooks: {PreToolUse: [$hook]}}' > "$SETTINGS_FILE"
   echo "  Created $SETTINGS_FILE with Tomato hook."
 else
   # settings.json exists — check if our hook is already registered
-  EXISTING=$(jq -r '
-    .hooks.PreToolUse // [] | map(select(.command == "$HOME/.claude/skills/tomato/bin/tomato-hook.sh")) | length
+  EXISTING=$(jq -r --arg cmd "$HOOK_CMD" '
+    .hooks.PreToolUse // [] | map(select(.hooks[]?.command == $cmd)) | length
   ' "$SETTINGS_FILE" 2>/dev/null || echo "0")
 
   if [ "$EXISTING" != "0" ] && [ "$EXISTING" != "" ]; then
@@ -73,12 +75,26 @@ else
   else
     # Add our hook to the PreToolUse array (create the array/object path if needed)
     TEMP_FILE=$(mktemp)
-    jq --argjson hook "$HOOK_ENTRY" '
-      .hooks //= {} |
-      .hooks.PreToolUse //= [] |
-      .hooks.PreToolUse += [$hook]
-    ' "$SETTINGS_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
-    echo "  Added Tomato hook to $SETTINGS_FILE."
+    echo "$HOOK_ENTRY" | jq -s --argjson hook "$(cat -)" '
+      .[0].hooks //= {} |
+      .[0].hooks.PreToolUse //= [] |
+      .[0].hooks.PreToolUse += [$hook] |
+      .[0]
+    ' "$SETTINGS_FILE" - > "$TEMP_FILE" 2>/dev/null
+    if [ $? -eq 0 ] && [ -s "$TEMP_FILE" ]; then
+      mv "$TEMP_FILE" "$SETTINGS_FILE"
+      echo "  Added Tomato hook to $SETTINGS_FILE."
+    else
+      # Fallback: simpler jq approach
+      rm -f "$TEMP_FILE"
+      TEMP_FILE=$(mktemp)
+      jq --argjson hook "$HOOK_ENTRY" '
+        .hooks //= {} |
+        .hooks.PreToolUse //= [] |
+        .hooks.PreToolUse += [$hook]
+      ' "$SETTINGS_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
+      echo "  Added Tomato hook to $SETTINGS_FILE."
+    fi
   fi
 fi
 
