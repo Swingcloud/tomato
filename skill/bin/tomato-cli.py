@@ -1,0 +1,563 @@
+#!/usr/bin/env python3
+"""Tomato CLI — AI-enforced Pomodoro timer utilities.
+
+Subcommands:
+  checkpoint --save   Capture git state from all active working directories
+  stats               Show focus stats (today or --week)
+  clear               Delete history and checkpoints
+  export              Export history as CSV or JSON (via stats --export)
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+TOMATO_DIR = Path.home() / ".tomato"
+ACTIVE_DIRS_FILE = TOMATO_DIR / "active_dirs.txt"
+CHECKPOINTS_DIR = TOMATO_DIR / "checkpoints"
+HISTORY_FILE = TOMATO_DIR / "history.jsonl"
+CONFIG_FILE = TOMATO_DIR / "config.json"
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "work_minutes": 25,
+    "rest_minutes": 5,
+    "long_rest_minutes": 15,
+    "cycles_before_long_rest": 4,
+    "notifications": True,
+    "break_suggestions": True,
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def load_config() -> Dict[str, Any]:
+    """Read ~/.tomato/config.json, falling back to defaults."""
+    config = dict(DEFAULT_CONFIG)
+    try:
+        if CONFIG_FILE.is_file():
+            with open(CONFIG_FILE, "r") as fh:
+                user = json.load(fh)
+            config.update(user)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"Warning: could not read config — {exc}", file=sys.stderr)
+    return config
+
+
+def run_git(args: List[str], cwd: str) -> Optional[str]:
+    """Run a git command, returning stdout or None on failure."""
+    try:
+        result = subprocess.run(
+            ["git"] + args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def read_history() -> List[Dict[str, Any]]:
+    """Read history.jsonl, skipping corrupted lines."""
+    entries: List[Dict[str, Any]] = []
+    if not HISTORY_FILE.is_file():
+        return entries
+    try:
+        with open(HISTORY_FILE, "r") as fh:
+            for lineno, line in enumerate(fh, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    print(
+                        f"Warning: skipping corrupted line {lineno} in history.jsonl",
+                        file=sys.stderr,
+                    )
+    except OSError as exc:
+        print(f"Error reading history: {exc}", file=sys.stderr)
+    return entries
+
+
+def fmt_duration(minutes: int) -> str:
+    """Format minutes as 'Xh Ym'."""
+    h, m = divmod(minutes, 60)
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    return f"{m}m"
+
+
+def date_from_ts(ts: float) -> datetime:
+    """Convert a unix timestamp to a UTC datetime."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# checkpoint --save
+# ---------------------------------------------------------------------------
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    """Capture git state from all active working directories."""
+    if not args.save:
+        print("Usage: tomato-cli.py checkpoint --save", file=sys.stderr)
+        return 1
+
+    # Read active dirs
+    dirs: List[str] = []
+    try:
+        if ACTIVE_DIRS_FILE.is_file():
+            with open(ACTIVE_DIRS_FILE, "r") as fh:
+                dirs = list(dict.fromkeys(
+                    line.strip() for line in fh if line.strip()
+                ))
+    except OSError as exc:
+        print(f"Warning: could not read active_dirs.txt — {exc}", file=sys.stderr)
+
+    projects: List[Dict[str, Any]] = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+
+        repo_root = run_git(["-C", d, "rev-parse", "--show-toplevel"], cwd=d)
+        if repo_root is None:
+            continue  # not a git repo
+
+        branch = run_git(["-C", d, "branch", "--show-current"], cwd=d) or ""
+        status = run_git(["-C", d, "status", "--porcelain"], cwd=d) or ""
+        diff_stat = run_git(["-C", d, "diff", "--stat"], cwd=d) or ""
+        log_out = run_git(["-C", d, "log", "--oneline", "-3"], cwd=d) or ""
+
+        recent_commits = [line for line in log_out.splitlines() if line.strip()]
+
+        projects.append(
+            {
+                "path": repo_root,
+                "branch": branch,
+                "status": status,
+                "diff_stat": diff_stat,
+                "recent_commits": recent_commits,
+            }
+        )
+
+    ts = int(time.time())
+    checkpoint = {
+        "timestamp": ts,
+        "projects": projects,
+    }
+
+    try:
+        CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+        outfile = CHECKPOINTS_DIR / f"{ts}.json"
+        with open(outfile, "w") as fh:
+            json.dump(checkpoint, fh, indent=2)
+        print(f"Checkpoint saved: {outfile}")
+    except OSError as exc:
+        print(f"Error saving checkpoint: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# stats
+# ---------------------------------------------------------------------------
+
+
+def _today_utc() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _entries_for_date(entries: List[Dict[str, Any]], target: datetime) -> List[Dict[str, Any]]:
+    """Filter entries whose timestamp falls on *target* date (UTC)."""
+    target_date = target.date()
+    return [
+        e
+        for e in entries
+        if datetime.fromtimestamp(e.get("timestamp", 0), tz=timezone.utc).date()
+        == target_date
+    ]
+
+
+def _compute_stats(entries: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute focused minutes, completed cycles, and breaks honored."""
+    work_minutes = config.get("work_minutes", 25)
+
+    # Count completed work cycles (work_end events)
+    completed_cycles = sum(1 for e in entries if e.get("event") == "work_end")
+
+    # Focused time: sum of duration_sec from work_end events, or fall back to
+    # cycles * work_minutes
+    total_sec = 0
+    has_duration = False
+    for e in entries:
+        if e.get("event") == "work_end":
+            dur = e.get("duration_sec")
+            if dur is not None:
+                total_sec += dur
+                has_duration = True
+    if has_duration:
+        focused_minutes = total_sec // 60
+    else:
+        focused_minutes = completed_cycles * work_minutes
+
+    # Breaks: rest_end means break was honored, rest_skip means skipped
+    breaks_honored = sum(1 for e in entries if e.get("event") == "rest_end")
+    breaks_skipped = sum(1 for e in entries if e.get("event") == "rest_skip")
+    total_breaks = breaks_honored + breaks_skipped
+    # If no explicit break events, assume break was offered after each cycle
+    if total_breaks == 0:
+        total_breaks = completed_cycles
+
+    return {
+        "focused_minutes": focused_minutes,
+        "completed_cycles": completed_cycles,
+        "breaks_honored": breaks_honored,
+        "total_breaks": total_breaks,
+    }
+
+
+def _compute_streak(all_entries: List[Dict[str, Any]]) -> int:
+    """Consecutive days (ending today or yesterday) with >=1 completed cycle."""
+    cycle_dates = set()
+    for e in all_entries:
+        if e.get("event") == "work_end":
+            d = datetime.fromtimestamp(
+                e.get("timestamp", 0), tz=timezone.utc
+            ).date()
+            cycle_dates.add(d)
+
+    if not cycle_dates:
+        return 0
+
+    today = _today_utc().date()
+    streak = 0
+    check = today
+    while check in cycle_dates:
+        streak += 1
+        check -= timedelta(days=1)
+
+    # If today has no cycles yet, start checking from yesterday
+    if streak == 0:
+        check = today - timedelta(days=1)
+        while check in cycle_dates:
+            streak += 1
+            check -= timedelta(days=1)
+
+    return streak
+
+
+def _bar(cycles: int, max_cycles: int) -> str:
+    """Render a simple bar chart with filled/empty blocks."""
+    bar_width = 10
+    if max_cycles == 0:
+        filled = 0
+    else:
+        filled = round(cycles / max_cycles * bar_width)
+    filled = min(filled, bar_width)
+    return "\u2588" * filled + "\u2591" * (bar_width - filled)
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Show focus statistics."""
+    entries = read_history()
+    config = load_config()
+
+    # Handle --export first (always operates on full history)
+    if args.export:
+        return _export(entries, args.export)
+
+    if not entries:
+        print("No sessions yet. Run /tomato start to begin!")
+        return 0
+
+    now = _today_utc()
+
+    if args.week:
+        return _stats_week(entries, config, now)
+    else:
+        return _stats_today(entries, config, now)
+
+
+def _stats_today(
+    entries: List[Dict[str, Any]], config: Dict[str, Any], now: datetime
+) -> int:
+    today_entries = _entries_for_date(entries, now)
+    stats = _compute_stats(today_entries, config)
+    streak = _compute_streak(entries)
+
+    date_str = now.strftime("%Y-%m-%d")
+    focused = fmt_duration(stats["focused_minutes"])
+    cycles = stats["completed_cycles"]
+    breaks_honored = stats["breaks_honored"]
+    total_breaks = stats["total_breaks"]
+
+    print(f"\U0001f345 Tomato Stats \u2014 Today ({date_str})")
+    print("\u2501" * 36)
+    print(f"  Focused time:    {focused} ({cycles} cycles)")
+    print(f"  Breaks taken:    {breaks_honored} of {total_breaks}")
+    print(f"  Current streak:  {streak} days")
+    return 0
+
+
+def _stats_week(
+    entries: List[Dict[str, Any]], config: Dict[str, Any], now: datetime
+) -> int:
+    week_start = now - timedelta(days=6)
+    start_str = week_start.strftime("%b %d")
+    end_str = now.strftime("%d")
+
+    # Collect per-day stats
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    daily: List[Dict[str, Any]] = []
+    total_focused = 0
+    total_cycles = 0
+    total_breaks_honored = 0
+    total_breaks = 0
+
+    for offset in range(7):
+        day = week_start + timedelta(days=offset)
+        day_entries = _entries_for_date(entries, day)
+        day_stats = _compute_stats(day_entries, config)
+        wday = day.weekday()  # 0=Mon
+        daily.append(
+            {
+                "name": day_names[wday],
+                "focused_minutes": day_stats["focused_minutes"],
+                "cycles": day_stats["completed_cycles"],
+            }
+        )
+        total_focused += day_stats["focused_minutes"]
+        total_cycles += day_stats["completed_cycles"]
+        total_breaks_honored += day_stats["breaks_honored"]
+        total_breaks += day_stats["total_breaks"]
+
+    max_cycles = max((d["cycles"] for d in daily), default=1) or 1
+
+    print(
+        f"\U0001f345 Tomato Stats \u2014 Week ({start_str}\u2013{end_str})"
+    )
+    print("\u2501" * 36)
+    print(
+        f"  Total focused:   {fmt_duration(total_focused)} ({total_cycles} cycles)"
+    )
+    print(f"  Breaks taken:    {total_breaks_honored} of {total_breaks}")
+    print()
+    print("  Daily:")
+    for d in daily:
+        bar = _bar(d["cycles"], max_cycles)
+        print(
+            f"  {d['name']}  {fmt_duration(d['focused_minutes']):>7s}  {bar}  {d['cycles']} cycles"
+        )
+    return 0
+
+
+def _export(entries: List[Dict[str, Any]], fmt: str) -> int:
+    if not entries:
+        print("No sessions yet. Run /tomato start to begin!")
+        return 0
+
+    if fmt == "json":
+        json.dump(entries, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    if fmt == "csv":
+        # Collect all keys across entries for CSV header
+        all_keys: List[str] = []
+        seen_keys: set[str] = set()
+        for e in entries:
+            for k in e:
+                if k not in seen_keys:
+                    all_keys.append(k)
+                    seen_keys.add(k)
+
+        writer = csv.DictWriter(sys.stdout, fieldnames=all_keys, extrasaction="ignore")
+        writer.writeheader()
+        for e in entries:
+            writer.writerow(e)
+        return 0
+
+    print(f"Unknown export format: {fmt}", file=sys.stderr)
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# clear
+# ---------------------------------------------------------------------------
+
+
+def cmd_clear(args: argparse.Namespace) -> int:
+    """Delete history and/or checkpoints."""
+    before_date: Optional[datetime] = None
+    if args.before:
+        try:
+            before_date = datetime.strptime(args.before, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            print(
+                f"Invalid date format: {args.before} (expected YYYY-MM-DD)",
+                file=sys.stderr,
+            )
+            return 1
+
+    events_cleared = 0
+    checkpoints_cleared = 0
+
+    # --- History ---
+    if before_date is None:
+        # Delete all history
+        try:
+            if HISTORY_FILE.is_file():
+                events_cleared = sum(
+                    1 for line in open(HISTORY_FILE) if line.strip()
+                )
+                HISTORY_FILE.unlink()
+        except OSError as exc:
+            print(f"Error clearing history: {exc}", file=sys.stderr)
+            return 1
+    else:
+        # Keep only entries on or after the cutoff date
+        entries = read_history()
+        events_cleared = 0
+        kept: List[str] = []
+        for e in entries:
+            ts = e.get("timestamp", 0)
+            entry_date = datetime.fromtimestamp(ts, tz=timezone.utc)
+            if entry_date < before_date:
+                events_cleared += 1
+            else:
+                kept.append(json.dumps(e))
+        try:
+            with open(HISTORY_FILE, "w") as fh:
+                for line in kept:
+                    fh.write(line + "\n")
+        except OSError as exc:
+            print(f"Error rewriting history: {exc}", file=sys.stderr)
+            return 1
+
+    # --- Checkpoints ---
+    try:
+        if CHECKPOINTS_DIR.is_dir():
+            for cp in sorted(CHECKPOINTS_DIR.iterdir()):
+                if not cp.name.endswith(".json"):
+                    continue
+                if before_date is None:
+                    cp.unlink()
+                    checkpoints_cleared += 1
+                else:
+                    # Parse timestamp from filename
+                    try:
+                        cp_ts = int(cp.stem)
+                        cp_dt = datetime.fromtimestamp(cp_ts, tz=timezone.utc)
+                        if cp_dt < before_date:
+                            cp.unlink()
+                            checkpoints_cleared += 1
+                    except (ValueError, OSError):
+                        pass
+    except OSError as exc:
+        print(f"Error clearing checkpoints: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Cleared {events_cleared:,} events and {checkpoints_cleared:,} checkpoints."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tomato-cli",
+        description="Tomato — AI-enforced Pomodoro timer utilities",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # checkpoint
+    cp = sub.add_parser("checkpoint", help="Capture git state snapshot")
+    cp.add_argument(
+        "--save", action="store_true", help="Save checkpoint now"
+    )
+
+    # stats
+    st = sub.add_parser("stats", help="Show focus statistics")
+    st.add_argument(
+        "--week", action="store_true", help="Show last 7 days instead of today"
+    )
+    st.add_argument(
+        "--export",
+        choices=["csv", "json"],
+        default=None,
+        help="Export raw history to stdout",
+    )
+
+    # clear
+    cl = sub.add_parser("clear", help="Delete history and checkpoints")
+    cl.add_argument(
+        "--before",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Only delete entries before this date",
+    )
+
+    # export (convenience alias for stats --export)
+    ex = sub.add_parser("export", help="Export raw history (csv or json)")
+    ex.add_argument(
+        "format",
+        choices=["csv", "json"],
+        help="Output format",
+    )
+
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command is None:
+        parser.print_help()
+        return 1
+
+    try:
+        if args.command == "checkpoint":
+            return cmd_checkpoint(args)
+        elif args.command == "stats":
+            return cmd_stats(args)
+        elif args.command == "clear":
+            return cmd_clear(args)
+        elif args.command == "export":
+            # Translate to stats --export path
+            entries = read_history()
+            return _export(entries, args.format)
+        else:
+            parser.print_help()
+            return 1
+    except Exception as exc:
+        print(f"Unexpected error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
