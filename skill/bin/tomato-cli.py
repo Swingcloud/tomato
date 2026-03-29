@@ -179,7 +179,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         now = int(time.time())
         append_history({
             "event": "session_stop",
-            "timestamp": now,
+            "ts": now,
             "reason": "force",
             "total_cycles": state.get("current_cycle", 1),
         })
@@ -209,7 +209,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     append_history({
         "event": "work_start",
-        "timestamp": now,
+        "ts": now,
         "cycle": 1,
     })
 
@@ -245,7 +245,7 @@ def cmd_stop(_args: argparse.Namespace) -> int:
 
     append_history({
         "event": "session_stop",
-        "timestamp": now,
+        "ts": now,
         "reason": "user",
         "total_cycles": cycles,
     })
@@ -281,7 +281,7 @@ def cmd_pause(_args: argparse.Namespace) -> int:
 
     append_history({
         "event": "pause",
-        "timestamp": now,
+        "ts": now,
         "phase": phase,
         "elapsed": elapsed,
     })
@@ -321,7 +321,7 @@ def cmd_resume(_args: argparse.Namespace) -> int:
 
     append_history({
         "event": "resume",
-        "timestamp": now,
+        "ts": now,
         "phase": phase,
     })
 
@@ -365,13 +365,13 @@ def _transition_work_to_rest(state: Dict[str, Any]) -> Dict[str, Any]:
 
     append_history({
         "event": "work_end",
-        "timestamp": transition_at,
+        "ts": transition_at,
         "cycle": cycle,
         "duration_sec": work_minutes * 60,
     })
     append_history({
         "event": "rest_start",
-        "timestamp": transition_at,
+        "ts": transition_at,
         "cycle": cycle,
         "rest_minutes": rest_min,
     })
@@ -391,12 +391,12 @@ def _transition_rest_to_work(state: Dict[str, Any]) -> Dict[str, Any]:
         save_state(state)
         append_history({
             "event": "rest_end",
-            "timestamp": transition_at,
+            "ts": transition_at,
             "cycle": cycle - 1,
         })
         append_history({
             "event": "session_stop",
-            "timestamp": transition_at,
+            "ts": transition_at,
             "reason": "completed",
             "total_cycles": max_cycles,
         })
@@ -410,12 +410,12 @@ def _transition_rest_to_work(state: Dict[str, Any]) -> Dict[str, Any]:
 
     append_history({
         "event": "rest_end",
-        "timestamp": transition_at,
+        "ts": transition_at,
         "cycle": cycle - 1,
     })
     append_history({
         "event": "work_start",
-        "timestamp": transition_at,
+        "ts": transition_at,
         "cycle": cycle,
     })
 
@@ -589,6 +589,7 @@ def _today_utc() -> datetime:
 def _entries_for_date(entries: List[Dict[str, Any]], target: datetime) -> List[Dict[str, Any]]:
     """Filter entries whose timestamp falls on *target* date (UTC)."""
     target_date = target.date()
+    # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
     return [
         e
         for e in entries
@@ -640,6 +641,7 @@ def _compute_streak(all_entries: List[Dict[str, Any]]) -> int:
     cycle_dates = set()
     for e in all_entries:
         if e.get("event") == "work_end":
+            # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
             d = datetime.fromtimestamp(
                 e.get("ts", e.get("timestamp", 0)), tz=timezone.utc
             ).date()
@@ -842,6 +844,7 @@ def cmd_clear(args: argparse.Namespace) -> int:
         events_cleared = 0
         kept: List[str] = []
         for e in entries:
+            # Support both "ts" (v2+) and "timestamp" (v1) for backwards compat
             ts = e.get("ts", e.get("timestamp", 0))
             entry_date = datetime.fromtimestamp(ts, tz=timezone.utc)
             if entry_date < before_date:

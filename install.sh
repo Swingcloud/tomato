@@ -73,28 +73,13 @@ else
   if [ "$EXISTING" != "0" ] && [ "$EXISTING" != "" ]; then
     echo "  Tomato hook already registered in $SETTINGS_FILE. Skipping."
   else
-    # Add our hook to the PreToolUse array (create the array/object path if needed)
     TEMP_FILE=$(mktemp)
-    echo "$HOOK_ENTRY" | jq -s --argjson hook "$(cat -)" '
-      .[0].hooks //= {} |
-      .[0].hooks.PreToolUse //= [] |
-      .[0].hooks.PreToolUse += [$hook] |
-      .[0]
-    ' "$SETTINGS_FILE" - > "$TEMP_FILE" 2>/dev/null
-    if [ $? -eq 0 ] && [ -s "$TEMP_FILE" ]; then
-      mv "$TEMP_FILE" "$SETTINGS_FILE"
-      echo "  Added Tomato hook to $SETTINGS_FILE."
-    else
-      # Fallback: simpler jq approach
-      rm -f "$TEMP_FILE"
-      TEMP_FILE=$(mktemp)
-      jq --argjson hook "$HOOK_ENTRY" '
-        .hooks //= {} |
-        .hooks.PreToolUse //= [] |
-        .hooks.PreToolUse += [$hook]
-      ' "$SETTINGS_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
-      echo "  Added Tomato hook to $SETTINGS_FILE."
-    fi
+    jq --argjson hook "$HOOK_ENTRY" '
+      .hooks //= {} |
+      .hooks.PreToolUse //= [] |
+      .hooks.PreToolUse += [$hook]
+    ' "$SETTINGS_FILE" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
+    echo "  Added Tomato hook to $SETTINGS_FILE."
   fi
 fi
 

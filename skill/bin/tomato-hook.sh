@@ -30,37 +30,26 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-# Ensure state dir exists
-mkdir -p "$TOMATO_DIR"
-
 # ---------------------------------------------------------------------------
-# Step 1: Read state.json
+# Step 1: Read state.json — single jq call extracts all fields
 # ---------------------------------------------------------------------------
 
-if [ ! -f "$STATE_FILE" ]; then
-    log_error "WARN: state.json not found, allowing tool call"
-    exit 0
-fi
-
-STATE="$(cat "$STATE_FILE" 2>/dev/null)" || {
-    log_error "WARN: failed to read state.json, allowing tool call"
+# Single jq call to extract all fields (saves ~15-30ms vs multiple spawns)
+ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, (.max_cycles // "null"), (.active_rest_minutes // "null")] | @tsv' "$STATE_FILE" 2>/dev/null)" || {
+    log_error "WARN: failed to parse state.json, allowing tool call"
     exit 0
 }
 
-# Validate JSON
-if ! echo "$STATE" | jq empty 2>/dev/null; then
-    log_error "WARN: state.json is not valid JSON, allowing tool call"
-    exit 0
-fi
+# If jq returned empty (invalid JSON), allow
+[ -z "$ALL_FIELDS" ] && exit 0
+
+read -r ACTIVE PAUSED PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES <<< "$ALL_FIELDS"
 
 # ---------------------------------------------------------------------------
 # Step 2: Check if active
 # ---------------------------------------------------------------------------
 
-ACTIVE="$(echo "$STATE" | jq -r '.active')"
-if [ "$ACTIVE" != "true" ]; then
-    exit 0
-fi
+[ "$ACTIVE" != "true" ] && exit 0
 
 # ---------------------------------------------------------------------------
 # Step 3: Human presence check
@@ -80,7 +69,6 @@ fi
 # Step 4: Pause check
 # ---------------------------------------------------------------------------
 
-PAUSED="$(echo "$STATE" | jq -r '.paused')"
 if [ "$PAUSED" = "true" ]; then
     echo "🍅 Tomato paused. Run /tomato resume to continue." >&2
     exit 2
@@ -125,8 +113,20 @@ format_time() {
     fi
 }
 
-read -r PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES <<< \
-    "$(echo "$STATE" | jq -r '[.phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, .max_cycles, .active_rest_minutes] | @tsv')"
+write_state() {
+    local content="$1"
+    local tmp
+    tmp="$(mktemp "$TOMATO_DIR/state.tmp.XXXXXX")"
+    echo "$content" > "$tmp"
+    mv "$tmp" "$STATE_FILE"
+}
+
+log_event() {
+    echo "$1" >> "$HISTORY_FILE"
+}
+
+# We need STATE for jq updates — read the file once into a variable.
+STATE="$(cat "$STATE_FILE" 2>/dev/null)" || STATE=""
 
 # ---------------------------------------------------------------------------
 # Step 5: Stale detection
@@ -140,12 +140,10 @@ if [ "$ELAPSED_SINCE_PHASE" -gt "$TOTAL_CYCLE_SECONDS" ]; then
     if acquire_lock; then
         # Update state: set active=false
         UPDATED="$(echo "$STATE" | jq --arg now "$NOW" '.active = false')"
-        TMPFILE="$(mktemp "$TOMATO_DIR/state.tmp.XXXXXX")"
-        echo "$UPDATED" > "$TMPFILE"
-        mv "$TMPFILE" "$STATE_FILE"
+        write_state "$UPDATED"
 
         # Log session_stop
-        echo "{\"event\":\"session_stop\",\"ts\":$NOW,\"reason\":\"stale\"}" >> "$HISTORY_FILE"
+        log_event "{\"event\":\"session_stop\",\"ts\":$NOW,\"reason\":\"stale\"}"
 
         release_lock
     fi
@@ -195,13 +193,11 @@ if [ "$PHASE" = "work" ] && [ "$ELAPSED" -ge $((WORK_MINUTES * 60)) ]; then
         --argjson now "$NOW" \
         '.phase = $phase | .active_rest_minutes = $arm | .phase_started_at = $now | .last_transition_at = $now'
     )"
-    TMPFILE="$(mktemp "$TOMATO_DIR/state.tmp.XXXXXX")"
-    echo "$UPDATED" > "$TMPFILE"
-    mv "$TMPFILE" "$STATE_FILE"
+    write_state "$UPDATED"
 
     # Log work_end and rest_start
-    echo "{\"event\":\"work_end\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE,\"duration_sec\":$ELAPSED}" >> "$HISTORY_FILE"
-    echo "{\"event\":\"rest_start\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE,\"rest_type\":\"$REST_TYPE\",\"duration_min\":$SELECTED_REST}" >> "$HISTORY_FILE"
+    log_event "{\"event\":\"work_end\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE,\"duration_sec\":$ELAPSED}"
+    log_event "{\"event\":\"rest_start\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE,\"rest_type\":\"$REST_TYPE\",\"duration_min\":$SELECTED_REST}"
 
     # Try to spawn checkpoint (skip silently if python3 not found)
     if command -v python3 >/dev/null 2>&1; then
@@ -264,11 +260,9 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -ge $((ACTIVE_REST_MINUTES * 60)) ]; th
     if [ "$MAX_CYCLES" != "null" ] && [ "$CURRENT_CYCLE" -ge "$MAX_CYCLES" ]; then
         # Session complete — stop
         UPDATED="$(echo "$STATE" | jq --argjson now "$NOW" '.active = false')"
-        TMPFILE="$(mktemp "$TOMATO_DIR/state.tmp.XXXXXX")"
-        echo "$UPDATED" > "$TMPFILE"
-        mv "$TMPFILE" "$STATE_FILE"
+        write_state "$UPDATED"
 
-        echo "{\"event\":\"session_stop\",\"ts\":$NOW,\"reason\":\"max_cycles\"}" >> "$HISTORY_FILE"
+        log_event "{\"event\":\"session_stop\",\"ts\":$NOW,\"reason\":\"max_cycles\"}"
 
         release_lock
         exit 0
@@ -283,16 +277,14 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -ge $((ACTIVE_REST_MINUTES * 60)) ]; th
         --argjson now "$NOW" \
         '.phase = $phase | .current_cycle = $cycle | .phase_started_at = $now | .last_transition_at = $now | .active_rest_minutes = null'
     )"
-    TMPFILE="$(mktemp "$TOMATO_DIR/state.tmp.XXXXXX")"
-    echo "$UPDATED" > "$TMPFILE"
-    mv "$TMPFILE" "$STATE_FILE"
+    write_state "$UPDATED"
 
     # Clear active_dirs
     : > "$ACTIVE_DIRS"
 
     # Log rest_end and work_start
-    echo "{\"event\":\"rest_end\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE}" >> "$HISTORY_FILE"
-    echo "{\"event\":\"work_start\",\"ts\":$NOW,\"cycle\":$NEW_CYCLE}" >> "$HISTORY_FILE"
+    log_event "{\"event\":\"rest_end\",\"ts\":$NOW,\"cycle\":$CURRENT_CYCLE}"
+    log_event "{\"event\":\"work_start\",\"ts\":$NOW,\"cycle\":$NEW_CYCLE}"
 
     release_lock
     exit 0
