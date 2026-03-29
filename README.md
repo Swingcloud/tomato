@@ -68,7 +68,7 @@ cd tomato
 ./uninstall.sh
 ```
 
-Cleanly removes the hook from `settings.json` without affecting other hooks.
+Removes the hook from `settings.json`, skill files, and `~/.tomato/` history.
 
 ## License
 
