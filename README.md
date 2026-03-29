@@ -16,6 +16,8 @@ cd tomato
 
 Requires: `jq` (JSON processor). Optional: `python3` (for stats and checkpoints).
 
+If you install the skill files manually (without `install.sh`), the hook auto-registers in `settings.json` on your first `/tomato start`. Restart Claude Code after that for enforcement to take effect.
+
 ## Usage
 
 ```
