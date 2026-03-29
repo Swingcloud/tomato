@@ -18,8 +18,8 @@ ERROR_LOG="$TOMATO_DIR/error.log"
 HISTORY_FILE="$TOMATO_DIR/history.jsonl"
 ACTIVE_DIRS="$TOMATO_DIR/active_dirs.txt"
 LOCK_DIR="$TOMATO_DIR/state.lock"
-GRACE_TIMEOUT_SEC=10   # gap between tool calls before grace expires
-GRACE_MAX_SEC=120      # hard cap on total grace duration
+GRACE_TIMEOUT_SEC_DEFAULT=10   # default gap between tool calls before grace expires
+GRACE_MAX_SEC_DEFAULT=300      # default hard cap on total grace duration (5 min)
 GRACE_CLEAR='.grace_session_id = null | .grace_last_call_at = null | .grace_started_at = null'
 
 log_error() {
@@ -54,7 +54,7 @@ fi
 # ---------------------------------------------------------------------------
 
 # Single jq call to extract all fields (saves ~15-30ms vs multiple spawns)
-ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, (.max_cycles // "null"), (.active_rest_minutes // "null"), (.grace_session_id // "null"), (.grace_last_call_at // "null"), (.grace_started_at // "null")] | @tsv' "$STATE_FILE" 2>/dev/null)" || {
+ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes, .rest_minutes, .long_rest_minutes, .cycles_before_long_rest, .current_cycle, (.max_cycles // "null"), (.active_rest_minutes // "null"), (.grace_session_id // "null"), (.grace_last_call_at // "null"), (.grace_started_at // "null"), (.grace_timeout_sec // "null"), (.grace_max_sec // "null")] | @tsv' "$STATE_FILE" 2>/dev/null)" || {
     log_error "WARN: failed to parse state.json, allowing tool call"
     exit 0
 }
@@ -62,7 +62,13 @@ ALL_FIELDS="$(jq -r '[.active, .paused, .phase, .phase_started_at, .work_minutes
 # If jq returned empty (invalid JSON), allow
 [ -z "$ALL_FIELDS" ] && exit 0
 
-read -r ACTIVE PAUSED PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES GRACE_SESSION_ID GRACE_LAST_CALL_AT GRACE_STARTED_AT <<< "$ALL_FIELDS"
+read -r ACTIVE PAUSED PHASE PHASE_STARTED_AT WORK_MINUTES REST_MINUTES LONG_REST_MINUTES CYCLES_BEFORE_LONG_REST CURRENT_CYCLE MAX_CYCLES ACTIVE_REST_MINUTES GRACE_SESSION_ID GRACE_LAST_CALL_AT GRACE_STARTED_AT GRACE_TIMEOUT_SEC_CFG GRACE_MAX_SEC_CFG <<< "$ALL_FIELDS"
+
+# Use configured values or fall back to defaults
+GRACE_TIMEOUT_SEC="${GRACE_TIMEOUT_SEC_CFG}"
+[ "$GRACE_TIMEOUT_SEC" = "null" ] && GRACE_TIMEOUT_SEC="$GRACE_TIMEOUT_SEC_DEFAULT"
+GRACE_MAX_SEC="${GRACE_MAX_SEC_CFG}"
+[ "$GRACE_MAX_SEC" = "null" ] && GRACE_MAX_SEC="$GRACE_MAX_SEC_DEFAULT"
 
 # ---------------------------------------------------------------------------
 # Step 2: Check if active
