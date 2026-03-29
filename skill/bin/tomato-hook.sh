@@ -39,7 +39,7 @@ fi
 HOOK_INPUT="$(cat 2>/dev/null)" || HOOK_INPUT=""
 if [ -n "$HOOK_INPUT" ]; then
     TOOL_CMD="$(echo "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
-    if echo "$TOOL_CMD" | grep -q 'tomato-cli.py' 2>/dev/null; then
+    if echo "$TOOL_CMD" | grep -qE '(^|/)python3? .+tomato-cli\.py( |$)' 2>/dev/null; then
         exit 0
     fi
 fi
@@ -152,6 +152,8 @@ ELAPSED_SINCE_PHASE=$(( NOW - PHASE_STARTED_AT ))
 if [ "$ELAPSED_SINCE_PHASE" -gt "$TOTAL_CYCLE_SECONDS" ]; then
     # Auto-stop: session is stale
     if acquire_lock; then
+        # Re-read state inside lock to avoid stale snapshot
+        STATE="$(cat "$STATE_FILE" 2>/dev/null)" || STATE=""
         # Update state: set active=false
         UPDATED="$(echo "$STATE" | jq --arg now "$NOW" '.active = false')"
         write_state "$UPDATED"
@@ -189,6 +191,9 @@ if [ "$PHASE" = "work" ] && [ "$ELAPSED" -ge $((WORK_MINUTES * 60)) ]; then
     if ! acquire_lock; then
         exit 2
     fi
+
+    # Re-read state inside lock to avoid stale snapshot
+    STATE="$(cat "$STATE_FILE" 2>/dev/null)" || STATE=""
 
     # Determine rest duration
     if [ "$CYCLES_BEFORE_LONG_REST" -gt 0 ] && \
@@ -269,6 +274,9 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -ge $((ACTIVE_REST_MINUTES * 60)) ]; th
     if ! acquire_lock; then
         exit 0
     fi
+
+    # Re-read state inside lock to avoid stale snapshot
+    STATE="$(cat "$STATE_FILE" 2>/dev/null)" || STATE=""
 
     # Check max_cycles
     if [ "$MAX_CYCLES" != "null" ] && [ "$CURRENT_CYCLE" -ge "$MAX_CYCLES" ]; then

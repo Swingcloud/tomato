@@ -38,8 +38,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rest_minutes": 5,
     "long_rest_minutes": 15,
     "cycles_before_long_rest": 4,
-    "notifications": True,
-    "break_suggestions": True,
 }
 
 
@@ -150,18 +148,113 @@ def fmt_remaining(seconds: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Hook auto-registration
+# ---------------------------------------------------------------------------
+
+SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
+HOOK_CMD = str(Path.home() / ".claude" / "skills" / "tomato" / "bin" / "tomato-hook.sh")
+
+
+def _hook_is_registered() -> bool:
+    """Check if the Tomato PreToolUse hook is in settings.json."""
+    try:
+        if not SETTINGS_FILE.is_file():
+            return False
+        with open(SETTINGS_FILE, "r") as fh:
+            settings = json.load(fh)
+        hooks = settings.get("hooks", {}).get("PreToolUse", [])
+        for entry in hooks:
+            for h in entry.get("hooks", []):
+                if h.get("command", "") == HOOK_CMD:
+                    return True
+        return False
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def _register_hook() -> bool:
+    """Register the Tomato PreToolUse hook in settings.json. Returns True on success."""
+    try:
+        settings_dir = SETTINGS_FILE.parent
+        settings_dir.mkdir(parents=True, exist_ok=True)
+
+        hook_entry = {
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": HOOK_CMD}],
+        }
+
+        if SETTINGS_FILE.is_file():
+            with open(SETTINGS_FILE, "r") as fh:
+                settings = json.load(fh)
+        else:
+            settings = {}
+
+        settings.setdefault("hooks", {})
+        settings["hooks"].setdefault("PreToolUse", [])
+        settings["hooks"]["PreToolUse"].append(hook_entry)
+
+        tmp = SETTINGS_FILE.with_suffix(".tmp")
+        with open(tmp, "w") as fh:
+            json.dump(settings, fh, indent=2)
+        os.rename(str(tmp), str(SETTINGS_FILE))
+        return True
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Warning: could not register hook — {exc}", file=sys.stderr)
+        return False
+
+
+def ensure_hook_registered() -> None:
+    """Check for hook and auto-register if missing."""
+    if _hook_is_registered():
+        return
+
+    # Check that the hook script actually exists
+    if not Path(HOOK_CMD).is_file():
+        print(
+            "Warning: hook script not found at expected path. "
+            "Run install.sh to set up Tomato properly.",
+            file=sys.stderr,
+        )
+        return
+
+    if _register_hook():
+        print(
+            "\U0001f345 Hook registered in ~/.claude/settings.json. "
+            "Restart Claude Code for enforcement to take effect."
+        )
+    else:
+        print(
+            "Warning: could not auto-register hook. "
+            "Run install.sh to set up enforcement.",
+            file=sys.stderr,
+        )
+
+
+# ---------------------------------------------------------------------------
 # start
 # ---------------------------------------------------------------------------
 
 
 def cmd_start(args: argparse.Namespace) -> int:
     """Start a new Pomodoro session."""
+    ensure_hook_registered()
     config = load_config()
 
     work = args.work if args.work is not None else config.get("work_minutes", 25)
     rest = args.rest if args.rest is not None else config.get("rest_minutes", 5)
     long_rest = config.get("long_rest_minutes", 15)
     cycles_before_long = config.get("cycles_before_long_rest", 4)
+
+    # Validate durations
+    if work <= 0:
+        print("Error: work minutes must be positive.", file=sys.stderr)
+        return 1
+    if rest <= 0:
+        print("Error: rest minutes must be positive.", file=sys.stderr)
+        return 1
+    if args.cycles is not None and args.cycles <= 0:
+        print("Error: cycles must be positive.", file=sys.stderr)
+        return 1
 
     state = load_state()
     if state is not None and state.get("active"):
@@ -620,13 +713,10 @@ def _compute_stats(entries: List[Dict[str, Any]], config: Dict[str, Any]) -> Dic
     else:
         focused_minutes = completed_cycles * work_minutes
 
-    # Breaks: rest_end means break was honored, rest_skip means skipped
+    # Breaks: rest_end means break was honored (completed naturally)
     breaks_honored = sum(1 for e in entries if e.get("event") == "rest_end")
-    breaks_skipped = sum(1 for e in entries if e.get("event") == "rest_skip")
-    total_breaks = breaks_honored + breaks_skipped
-    # If no explicit break events, assume break was offered after each cycle
-    if total_breaks == 0:
-        total_breaks = completed_cycles
+    # Total breaks offered = completed cycles (each cycle ends with a rest)
+    total_breaks = max(breaks_honored, completed_cycles)
 
     return {
         "focused_minutes": focused_minutes,

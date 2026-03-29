@@ -9,12 +9,14 @@ Tomato uses Claude Code's hook system to **block all tool calls** during rest pe
 ## Install
 
 ```bash
-git clone https://github.com/sam-lin/tomato.git
+git clone https://github.com/Swingcloud/tomato.git
 cd tomato
 ./install.sh
 ```
 
 Requires: `jq` (JSON processor). Optional: `python3` (for stats and checkpoints).
+
+If you install the skill files manually (without `install.sh`), the hook auto-registers in `settings.json` on your first `/tomato start`. Restart Claude Code after that for enforcement to take effect.
 
 ## Usage
 

@@ -62,7 +62,8 @@ HOOKJSON
 if [ ! -f "$SETTINGS_FILE" ]; then
   # settings.json does not exist — create it with our hook
   mkdir -p "$(dirname "$SETTINGS_FILE")"
-  echo "$HOOK_ENTRY" | jq -n --argjson hook "$(cat -)" '{hooks: {PreToolUse: [$hook]}}' > "$SETTINGS_FILE"
+  TEMP_FILE=$(mktemp)
+  jq -n --argjson hook "$HOOK_ENTRY" '{hooks: {PreToolUse: [$hook]}}' > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_FILE"
   echo "  Created $SETTINGS_FILE with Tomato hook."
 else
   # settings.json exists — check if our hook is already registered
