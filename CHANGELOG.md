@@ -2,6 +2,17 @@
 
 All notable changes to Tomato will be documented in this file.
 
+## [0.1.1] - 2026-04-17
+
+### Fixed
+- Grace-period arithmetic no longer bypasses rest indefinitely when the system clock jumps backward; backward skew now falls through to block (#11)
+- `uninstall.sh` preserves `~/.tomato/` focus history by default; pass `--purge` to also delete it (#11)
+- `load_config()` rejects invalid user values (negative ints, wrong types, bools) and falls back to per-key defaults with a warning (#11)
+- Stats tests no longer flake around local midnight (#11)
+
+### Changed
+- Softened the README hook-latency claim; we'll add a CI benchmark before quoting specific numbers again (#11)
+
 ## [0.1.0] - 2026-04-17
 
 Initial public release.
