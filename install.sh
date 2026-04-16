@@ -35,7 +35,7 @@ mkdir -p "$TOMATO_DIR/checkpoints"
 
 echo "Installing skill to $SKILL_DIR/ ..."
 mkdir -p "$SKILL_DIR"
-cp -R "$SCRIPT_DIR/skill/" "$SKILL_DIR/"
+cp -R "$SCRIPT_DIR/skills/tomato/" "$SKILL_DIR/"
 
 # ---------- Make scripts executable ----------
 

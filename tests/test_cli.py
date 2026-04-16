@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-CLI_SCRIPT = "skill/bin/tomato-cli.py"
+CLI_SCRIPT = "skills/tomato/bin/tomato-cli.py"
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 

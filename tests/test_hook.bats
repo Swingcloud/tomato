@@ -6,7 +6,7 @@
 # The hook reads ~/.tomato/state.json and exits 0 (allow) or 2 (block).
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-HOOK_SCRIPT="$REPO_ROOT/skill/bin/tomato-hook.sh"
+HOOK_SCRIPT="$REPO_ROOT/skills/tomato/bin/tomato-hook.sh"
 
 setup() {
     TEST_HOME="$(mktemp -d)"
