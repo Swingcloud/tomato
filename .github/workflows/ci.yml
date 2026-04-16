@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python test deps
+        run: pip install pytest
+
+      - name: Install bats + jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+
+      - name: Install bats + jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
+
+      - name: Run pytest
+        run: pytest -v
+
+      - name: Run bats
+        run: bats tests/test_hook.bats
