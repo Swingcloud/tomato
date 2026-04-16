@@ -6,6 +6,11 @@ SKILL_DIR="$HOME/.claude/skills/$SKILL_NAME"
 TOMATO_DIR="$HOME/.tomato"
 SETTINGS_FILE="$HOME/.claude/settings.json"
 
+PURGE=0
+if [ "${1:-}" = "--purge" ]; then
+  PURGE=1
+fi
+
 # ---------- Remove hook from settings.json ----------
 
 echo "Removing Tomato hook from Claude Code settings..."
@@ -73,8 +78,12 @@ fi
 # ---------- Remove history ----------
 
 if [ -d "$TOMATO_DIR" ]; then
-  rm -rf "$TOMATO_DIR"
-  echo "  Removed $TOMATO_DIR/"
+  if [ "$PURGE" = "1" ]; then
+    rm -rf "$TOMATO_DIR"
+    echo "  Removed $TOMATO_DIR/ (including focus history)"
+  else
+    echo "  Preserved $TOMATO_DIR/ (focus history). Re-run with --purge to delete."
+  fi
 else
   echo "  $TOMATO_DIR/ not found. Skipping."
 fi

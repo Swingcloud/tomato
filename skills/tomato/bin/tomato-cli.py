@@ -58,6 +58,15 @@ def load_config() -> Dict[str, Any]:
             config.update(user)
     except (json.JSONDecodeError, OSError) as exc:
         print(f"Warning: could not read config — {exc}", file=sys.stderr)
+
+    for key, default in DEFAULT_CONFIG.items():
+        val = config.get(key)
+        if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
+            print(
+                f"Warning: config.json {key}={val!r} is invalid; using default {default}",
+                file=sys.stderr,
+            )
+            config[key] = default
     return config
 
 
