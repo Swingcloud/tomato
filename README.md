@@ -1,12 +1,20 @@
 # Tomato
 
-AI-enforced Pomodoro for Claude Code. It doesn't remind you to take breaks. It makes you.
+AI-enforced Pomodoro for Claude Code. Doesn't remind you to take breaks — makes you take them.
 
 ## What it does
 
 Tomato uses Claude Code's hook system to **block all tool calls** during rest periods. When your work sprint ends, Claude Code literally refuses to work until you've taken a break. You can't dismiss it. That's the point.
 
 ## Install
+
+The easiest way (via [skills.sh](https://skills.sh)):
+
+```bash
+npx skills add Swingcloud/tomato -g -a claude-code
+```
+
+Or manually, from source:
 
 ```bash
 git clone https://github.com/Swingcloud/tomato.git
@@ -16,7 +24,7 @@ cd tomato
 
 Requires: `jq` (JSON processor). Optional: `python3` (for stats and checkpoints).
 
-If you install the skill files manually (without `install.sh`), the hook auto-registers in `settings.json` on your first `/tomato start`. Restart Claude Code after that for enforcement to take effect.
+The hook auto-registers in `settings.json` on your first `/tomato start`. Restart Claude Code after that for enforcement to take effect.
 
 ## Usage
 
