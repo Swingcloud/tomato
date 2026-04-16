@@ -228,14 +228,16 @@ class TestStats:
 
     def test_stats_with_data(self, tmp_path: Path) -> None:
         """Write history entries with 'timestamp' key -> stats shows correct cycles."""
+        # Keep all timestamps within a 5-second window so the test never
+        # straddles midnight (stats filters by local-time "today").
         now = int(time.time())
         events = [
-            {"event": "work_start", "timestamp": now - 3000, "cycle": 1},
-            {"event": "work_end", "timestamp": now - 1500, "cycle": 1, "duration_sec": 1500},
-            {"event": "rest_start", "timestamp": now - 1500, "cycle": 1, "rest_minutes": 5},
-            {"event": "rest_end", "timestamp": now - 1200, "cycle": 1},
-            {"event": "work_start", "timestamp": now - 1200, "cycle": 2},
-            {"event": "work_end", "timestamp": now - 100, "cycle": 2, "duration_sec": 1100},
+            {"event": "work_start", "timestamp": now - 5, "cycle": 1},
+            {"event": "work_end", "timestamp": now - 4, "cycle": 1, "duration_sec": 1500},
+            {"event": "rest_start", "timestamp": now - 3, "cycle": 1, "rest_minutes": 5},
+            {"event": "rest_end", "timestamp": now - 2, "cycle": 1},
+            {"event": "work_start", "timestamp": now - 1, "cycle": 2},
+            {"event": "work_end", "timestamp": now, "cycle": 2, "duration_sec": 1100},
         ]
         write_history(tmp_path, events)
 
@@ -342,6 +344,26 @@ class TestMenu:
         assert "Commands:" in result.stdout
 
 
+class TestConfigValidation:
+    def test_invalid_config_falls_back_to_defaults(self, tmp_path: Path) -> None:
+        """Bad config values (negative, wrong type) fall back to defaults with a warning."""
+        config_dir = tmp_path / ".tomato"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(json.dumps({
+            "work_minutes": -5,
+            "rest_minutes": "not an int",
+            "grace_max_sec": True,
+        }))
+
+        result = run_cli("start", home=tmp_path)
+        assert result.returncode == 0
+        assert "invalid" in result.stderr.lower()
+
+        state = read_state(tmp_path)
+        assert state["work_minutes"] == 25
+        assert state["rest_minutes"] == 5
+
+
 # ---------------------------------------------------------------------------
 # Integration: timestamp key consistency
 # ---------------------------------------------------------------------------
@@ -360,10 +382,11 @@ class TestTimestampKey:
 
     def test_stats_reads_timestamp_key(self, tmp_path: Path) -> None:
         """Write history with 'timestamp' key -> stats returns correct data (not zero)."""
+        # Keep timestamps within a small window so the test never straddles midnight.
         now = int(time.time())
         events = [
-            {"event": "work_start", "timestamp": now - 1600, "cycle": 1},
-            {"event": "work_end", "timestamp": now - 100, "cycle": 1, "duration_sec": 1500},
+            {"event": "work_start", "timestamp": now - 2, "cycle": 1},
+            {"event": "work_end", "timestamp": now, "cycle": 1, "duration_sec": 1500},
         ]
         write_history(tmp_path, events)
 

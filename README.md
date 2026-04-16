@@ -46,7 +46,7 @@ The hook auto-registers in `settings.json` on your first `/tomato start`. Restar
 
 Tomato installs a global `PreToolUse` hook in `~/.claude/settings.json`. On every tool call, the hook checks a state file (`~/.tomato/state.json`) and either allows the call (exit 0) or blocks it (exit 2).
 
-The hook is fast: ~8ms on the normal path (read JSON, check timer, allow). Phase transitions (work to rest, rest to work) take ~35ms and happen once every 25 minutes.
+The hook is designed to be fast on the normal path (read JSON, check timer, allow). Phase transitions (work → rest, rest → work) happen once every 25 minutes and do a little more work.
 
 During rest, all tool calls are blocked — but `/tomato stop`, `/tomato resume`, and `/tomato status` still work. The hook whitelists its own CLI so you're never locked out.
 

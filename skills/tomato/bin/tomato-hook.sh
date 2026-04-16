@@ -275,8 +275,11 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
     # Grace period: let the active session finish its current task
     if [ "$GRACE_SESSION_ID" != "null" ] && [ -n "$SESSION_ID" ] && \
        [ "$SESSION_ID" = "$GRACE_SESSION_ID" ]; then
-        # Check hard cap first
+        # Check hard cap first. The `$NOW -ge $GRACE_*_AT` guards protect against
+        # backward clock skew: without them, a negative delta would evaluate as
+        # "within grace window" and bypass rest indefinitely.
         if [ "$GRACE_STARTED_AT" != "null" ] && \
+           [ "$NOW" -ge "$GRACE_STARTED_AT" ] && \
            [ $((NOW - GRACE_STARTED_AT)) -ge "$GRACE_MAX_SEC" ]; then
             # Hard cap reached — clear grace, fall through to block
             if acquire_lock; then
@@ -285,6 +288,7 @@ if [ "$PHASE" = "rest" ] && [ "$ELAPSED" -lt $((ACTIVE_REST_MINUTES * 60)) ]; th
                 release_lock
             fi
         elif [ "$GRACE_LAST_CALL_AT" != "null" ] && \
+             [ "$NOW" -ge "$GRACE_LAST_CALL_AT" ] && \
              [ $((NOW - GRACE_LAST_CALL_AT)) -lt "$GRACE_TIMEOUT_SEC" ]; then
             # Within grace window — allow and update timestamp
             if acquire_lock; then
