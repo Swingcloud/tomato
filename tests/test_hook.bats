@@ -16,6 +16,10 @@ setup() {
 
     # Prevent checkpoint spawn and notifications during tests
     export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(which jq)")"
+
+    # Tests assert both bypass and enforcement paths. CI runners set these
+    # globally, which would make enforcement tests see a bypassed hook.
+    unset CI GITHUB_ACTIONS CLAUDE_CODE_HEADLESS
 }
 
 teardown() {
